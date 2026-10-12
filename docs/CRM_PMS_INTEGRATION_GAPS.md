@@ -1,6 +1,6 @@
 # CRM/PMS integration gaps
 
-Аудит фактического кода13 октября2026. CRM commit `b9625b49544e19511036119266ad1c9f663a1cb0`; PMS commit `0dbc7f80893a0846dd3d419f2bd822620b3d4092`. PMS M3/M4 параллельную работу не изменяли. Повторить contract discovery после её завершения.
+Аудит фактического кода 13 октября 2026. CRM commit `b9625b49544e19511036119266ad1c9f663a1cb0`; PMS commit `0dbc7f80893a0846dd3d419f2bd822620b3d4092`. PMS M3/M4 параллельную работу не изменяли. Повторить contract discovery после её завершения.
 
 Полные источники со строками, behavior/change/owner/compatibility/test matrices: [CRM_AUDIT](CRM_AUDIT.md), [PMS_AUDIT](PMS_AUDIT.md). Согласованная программа интеграции:
 

@@ -1,6 +1,6 @@
 # Studio ↔ n8n ↔ CRM ↔ PMS
 
-Contract `studio-gateway-v1`, аудит13 октября2026. n8n workflow не подключён; ниже контракт следующей интеграционной поставки.
+Contract `studio-gateway-v1`, аудит 13 октября 2026. n8n workflow не подключён; ниже контракт следующей интеграционной поставки.
 
 ## Ownership / identity
 
@@ -26,7 +26,7 @@ Base `/api/integrations/agent`, header `x-crm-api-key`. Discovery `GET /capabili
 
 `POST /messages/inbound` передаёт `{channel:'simulator',propertyId,externalUserId,externalChatId,externalMessageId,externalUpdateId:correlationId,firstName,lastName,displayName,language,text,attachments}`. Attachment: `{externalFileId:studioAssetId,kind,mimeType,fileName,fileSize}`. Response `{duplicate,messageId,context:{conversation:{id}},aiReplyAllowed,allowedActions}`. Duplicate сохраняет исходные IDs; changed payload under same key — conflict. Studio не отправляет inbound повторно через параллельный owner.
 
-Transcript `GET /conversations/:id/messages?channel=simulator&propertyId=…&externalUserId=…&after=<messageId>&limit=100` → `{messages,nextCursor}`. Mapper пропускает только in/out, исключает internal note, contact inbound → guest. Null cursor означает drained page. Raw note-only pages также продвигают cursor. CRM sentAt mutable: выполняется полное paged merge by CRM ID, cache200 guest messages. Выше5000 raw records возвращается честный `RECONCILIATION_WINDOW_EXCEEDED`; нужен immutable changes cursor.
+Transcript `GET /conversations/:id/messages?channel=simulator&propertyId=…&externalUserId=…&after=<messageId>&limit=100` → `{messages,nextCursor}`. Mapper пропускает только in/out, исключает internal note, contact inbound → guest. Null cursor означает drained page. Raw note-only pages также продвигают cursor. CRM sentAt mutable: выполняется полное paged merge by CRM ID, cache — 200 guest messages. Выше 5000 raw records возвращается честный `RECONCILIATION_WINDOW_EXCEEDED`; нужен immutable changes cursor.
 
 `POST /messages/outbound/prepare` оставляет pending и не отправляет simulator автоматически. Workflow обязан вызвать `/messages/outbound/result` с success:true и stable simulator message reference. HTTP200 с success:false — ошибка доставки. Studio не превращает webhook acceptance в guest delivery.
 
