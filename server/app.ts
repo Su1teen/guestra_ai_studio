@@ -779,34 +779,30 @@ export function createApp(db: Database, cfg: Config) {
         })
         .strict()
         .parse(req.body);
-      await db.transaction(async (tx) => {
+      const updated = await db.transaction(async (tx) => {
         await tx.query(
           "SELECT id FROM tester_annotations WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
           [req.principal.workspaceId, req.params.id],
         );
-        res.json(
-          await new Repository(
-            tx,
-            req.principal.workspaceId,
-          ).update<Annotation>(
-            "tester_annotations",
-            String(req.params.id),
-            (v) => ({
-              ...v,
-              ...input,
-              history: [
-                ...v.history,
-                {
-                  at: now(),
-                  author: req.principal.name,
-                  body: v.body,
-                  status: v.status,
-                },
-              ],
-            }),
-          ),
+        return new Repository(tx, req.principal.workspaceId).update<Annotation>(
+          "tester_annotations",
+          String(req.params.id),
+          (v) => ({
+            ...v,
+            ...input,
+            history: [
+              ...v.history,
+              {
+                at: now(),
+                author: req.principal.name,
+                body: v.body,
+                status: v.status,
+              },
+            ],
+          }),
         );
       });
+      res.json(updated);
     },
   );
   app.post("/api/agents", roles("admin"), async (req, res) => {
