@@ -47,6 +47,10 @@ export async function api<T>(
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (!response.headers.get("content-type")?.includes("application/json"))
+    throw new Error(
+      "Сервер пока недоступен. Повторите через несколько секунд.",
+    );
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message ?? "Ошибка запроса");
   return result as T;

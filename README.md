@@ -32,7 +32,7 @@ npm run check
 npm run test:browser
 ```
 
-Для браузерных тестов: `npx playwright install chromium`; на Windows можно задать `PLAYWRIGHT_CHANNEL=msedge` для установленного Edge. Desktop/mobile сценарии проверяют создание клиента/чата, черновик после reload, отправку, заметки, версии/diff промптов, виртуальный звонок, image lightbox, PDF download и WAV playback.
+Для браузерных тестов: `npx playwright install chromium`; на Windows можно задать `PLAYWRIGHT_CHANNEL=msedge` для установленного Edge. Desktop/mobile сценарии проверяют восстановление входа после недоступности API, создание клиента/чата, черновик после reload, отправку, заметки, версии/diff промптов, виртуальный звонок, image lightbox, PDF download и WAV playback. Запуск тестов ожидает готовности API, включая миграции и bootstrap.
 
 `TEST_DATABASE_URL` переключает API-тесты на отдельную **одноразовую БД**. Не используйте БД с пользовательскими данными: тесты сбрасывают свою очередь. CI использует PostgreSQL 16 и Chromium. Отдельный persistence-test закрывает и повторно открывает PGlite.
 

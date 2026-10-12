@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.title.startsWith("recovers login")) return;
   await page.goto("/");
   await page.getByRole("button", { name: "Открыть локальную студию" }).click();
   await expect(
@@ -19,6 +20,24 @@ test.beforeEach(async ({ page }, testInfo) => {
     await page.reload();
     await page.locator(".conversation-item").filter({ hasText: title }).click();
   }
+});
+test("recovers login after temporary API unavailability", async ({ page }) => {
+  const unavailableUntil = Date.now() + 1500;
+  await page.route("**/api/auth/options", async (route) => {
+    if (Date.now() < unavailableUntil)
+      await route.fulfill({
+        status: 502,
+        contentType: "text/plain",
+        body: "Starting",
+      });
+    else await route.continue();
+  });
+  await page.goto("/");
+  await expect(page.getByText("Ожидаем подключения к студии…")).toBeVisible();
+  await page.getByRole("button", { name: "Открыть локальную студию" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Разговоры", exact: true }),
+  ).toBeVisible();
 });
 test("creates guest, chat, persists draft, sends and reviews", async ({
   page,

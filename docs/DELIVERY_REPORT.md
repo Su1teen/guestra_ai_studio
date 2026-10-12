@@ -12,7 +12,7 @@ Dockerfile, Railway configuration, compose PostgreSQL, env template, CI, setup/A
 
 ## VERIFIED
 
-Local typecheck, 25 API/security/idempotency/persistence tests and production build passed. All 6 browser acceptance tests on desktop/mobile passed for guest/chat creation, draft after reload, send/safe link, annotations/resolve, prompt history/diff, virtual call turns, image lightbox, PDF download and actual WAV playback. Local browser execution used installed Edge; CI uses Chromium and PostgreSQL 16. Final CI status is recorded in the PR description after execution.
+Local typecheck, 25 API/security/idempotency/persistence tests and production build passed. The 8 browser acceptance tests on desktop/mobile cover temporary API unavailability recovery, guest/chat creation, draft after reload, send/safe link, annotations/resolve, prompt history/diff, virtual call turns, image lightbox, PDF download and actual WAV playback. Local browser execution uses installed Edge; CI uses Chromium and PostgreSQL 16. Final browser/CI status is recorded in the PR description after execution. npm audit reports zero known dependency vulnerabilities for the delivery lockfile.
 
 Related CRM/PMS findings verified by static source reading at pinned commits; live endpoints/business operations were not executed. UI inspected in the browser; initial draft/selection reload and async state races were corrected.
 

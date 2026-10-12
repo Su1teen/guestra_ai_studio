@@ -1206,9 +1206,27 @@ function Login({
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false);
   useEffect(() => {
-    void api<{ localPreview: boolean }>("/auth/options").then((v) =>
-      setLocal(v.localPreview),
-    );
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const connect = async () => {
+      try {
+        const options = await api<{ localPreview: boolean }>("/auth/options");
+        if (!stopped) {
+          setLocal(options.localPreview);
+          setMessage("");
+        }
+      } catch {
+        if (!stopped) {
+          setMessage("Ожидаем подключения к студии…");
+          timer = setTimeout(() => void connect(), 2000);
+        }
+      }
+    };
+    void connect();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, []);
   return (
     <div className="login-screen">
