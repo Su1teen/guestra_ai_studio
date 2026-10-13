@@ -14,6 +14,9 @@ export const stages = [
   "service_only",
   "post_stay",
   "returning_guest",
+  "due_out",
+  "cancelled",
+  "human_handoff",
 ] as const;
 export type Mode = "preview" | "crm" | "sandbox";
 export type Role = "admin" | "tester" | "reviewer" | "viewer";
@@ -40,9 +43,13 @@ export interface Identity extends RecordBase {
   externalUserId: string;
   crmCustomerId?: string;
   pmsGuestId?: string;
+  environment?: string;
+  verifiedAt?: string;
+  verificationSource?: string;
 }
 export interface Conversation extends RecordBase {
   agentId?: string;
+  promptVersionId?: string;
   clientId: string;
   identityId: string;
   title: string;
@@ -50,6 +57,16 @@ export interface Conversation extends RecordBase {
   mode: Mode;
   crmConversationId?: string;
   cursor?: string;
+  changesCursor?: number;
+  propertyMapping?: {
+    crmPropertyId: string;
+    crmTenantId: string;
+    pmsPropertyId: string;
+    pmsTenantId: string;
+    environment: string;
+  };
+  crmCustomerId?: string;
+  pmsGuestId?: string;
   stage: string;
   draft: string;
   verdict: "unreviewed" | "pass" | "fail";
@@ -66,6 +83,9 @@ export interface Attachment {
   kind: "image" | "document" | "audio" | "video";
   url?: string;
   scanStatus?: string;
+  externalFileId?: string;
+  processingStatus?: string;
+  transcript?: string;
 }
 export interface Message extends RecordBase {
   sequence?: number;
@@ -78,6 +98,8 @@ export interface Message extends RecordBase {
   attachments: Attachment[];
   replyTo?: string;
   source: "preview" | "crm";
+  tombstone?: boolean;
+  changeSequence?: number;
 }
 export interface Attempt extends RecordBase {
   conversationId: string;
@@ -119,10 +141,30 @@ export interface Run extends RecordBase {
   }[];
   durationMs: number;
   error?: string;
+  agentId?: string;
+  promptHash?: string;
+  dispatchHash?: string;
+  dispatchEnvelope?: import("../server/gateway-contract.js").Envelope;
+  claim?: { payloadHash: string; executionId: string; claimedAt: string };
+  lastEventSequence?: number;
+  executionId?: string;
+  workflowVersion?: string;
+  deploymentId?: string;
+  contextVersion?: string;
+  allowedActions?: string[];
+  businessOperationId?: string;
+  businessStatus?: string;
 }
 export interface Annotation extends RecordBase {
   conversationId: string;
-  targetType: "conversation" | "message" | "run" | "tool" | "call";
+  targetType:
+    | "conversation"
+    | "message"
+    | "run"
+    | "tool"
+    | "call"
+    | "operation"
+    | "deployment";
   targetId: string;
   author: string;
   body: string;
@@ -131,6 +173,7 @@ export interface Annotation extends RecordBase {
   flags: string[];
   status: "open" | "resolved";
   history: { at: string; author: string; body: string; status: string }[];
+  externalReference?: string;
 }
 export interface Agent extends RecordBase {
   name: string;
@@ -147,7 +190,17 @@ export interface Prompt extends RecordBase {
   agentId: string;
   version: number;
   body: string;
-  status: "draft" | "published";
+  status: "draft" | "test" | "published";
+  deploymentState?:
+    | "LOCAL_DRAFT"
+    | "TEST_VERSION"
+    | "STUDIO_PUBLISHED"
+    | "N8N_DEPLOYMENT_PENDING"
+    | "N8N_DEPLOYED"
+    | "DEPLOYMENT_FAILED"
+    | "ROLLED_BACK";
+  deploymentId?: string;
+  readBackHash?: string;
   author: string;
   parentId?: string;
 }
@@ -206,6 +259,7 @@ export const clientSchema = z
 export const conversationSchema = z
   .object({
     agentId: z.string().optional(),
+    promptVersionId: z.string().min(1).optional(),
     clientId: z.string().min(1),
     title: z.string().trim().min(1).max(150),
     channel: z.enum(channels),
@@ -227,7 +281,15 @@ export const messageSchema = z
 export const annotationSchema = z
   .object({
     conversationId: z.string(),
-    targetType: z.enum(["conversation", "message", "run", "tool", "call"]),
+    targetType: z.enum([
+      "conversation",
+      "message",
+      "run",
+      "tool",
+      "call",
+      "operation",
+      "deployment",
+    ]),
     targetId: z.string(),
     body: z.string().trim().min(1).max(4000),
     severity: z.enum(["info", "warning", "critical"]),

@@ -53,6 +53,33 @@ type UploadItem = {
   asset?: Attachment;
   error?: string;
 };
+function mergeTimeline(
+  old: Timeline | undefined,
+  value: Timeline,
+  older = false,
+): Timeline {
+  if (!old || old.conversation.id !== value.conversation.id) return value;
+  const removed = new Set(value.removedMessageIds ?? []),
+    messages = new Map(
+      old.messages.filter((m) => !removed.has(m.id)).map((m) => [m.id, m]),
+    );
+  for (const message of value.messages) messages.set(message.id, message);
+  const ordered = [...messages.values()].sort((a, b) =>
+    value.conversation.mode === "preview"
+      ? (a.sequence ?? 0) - (b.sequence ?? 0)
+      : a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
+  return {
+    ...value,
+    messages: ordered,
+    olderCursor: ordered[0]?.id,
+    hasOlder: older
+      ? value.hasOlder
+      : old.messages.length > value.messages.length
+        ? old.hasOlder
+        : value.hasOlder,
+  };
+}
 export default function App() {
   const [data, setData] = useState<Bootstrap>(),
     [auth, setAuth] = useState<boolean | undefined>(),
@@ -131,7 +158,8 @@ export default function App() {
       const value = await api<Timeline>(
         "/conversations/" + selected + "/timeline",
       );
-      if (selectedRef.current === selected) setTimeline(value);
+      if (selectedRef.current === selected)
+        setTimeline((old) => mergeTimeline(old, value));
     } catch (e) {
       notice((e as Error).message);
     }
@@ -146,7 +174,7 @@ export default function App() {
         const value = await api<Timeline>(
           "/conversations/" + selected + "/timeline",
         );
-        if (!cancelled) setTimeline(value);
+        if (!cancelled) setTimeline((old) => mergeTimeline(old, value));
       } catch (e) {
         if (!cancelled) notice((e as Error).message);
       }
@@ -372,7 +400,20 @@ export default function App() {
     ),
   ];
   const processing = timeline?.runs.some((r) =>
-    ["queued", "processing", "retrying", "awaiting_crm"].includes(r.status),
+    [
+      "queued",
+      "processing",
+      "retrying",
+      "awaiting_crm",
+      "dispatch_accepted",
+      "inbound_saved",
+      "agent_processing",
+      "tool_execution",
+      "business_pending",
+      "business_completed",
+      "reply_prepared",
+      "reply_delivered",
+    ].includes(r.status),
   );
   const activeUploads = uploads.filter((u) => u.conversationId === selected),
     reply = timeline?.messages.find((m) => m.id === replyId),
@@ -745,6 +786,31 @@ export default function App() {
                       </div>
                     ) : (
                       <>
+                        {timeline.hasOlder && (
+                          <button
+                            className="button secondary"
+                            onClick={async () => {
+                              try {
+                                const value = await api<Timeline>(
+                                  "/conversations/" +
+                                    selected +
+                                    "/timeline?before=" +
+                                    encodeURIComponent(
+                                      timeline.olderCursor ?? "",
+                                    ),
+                                );
+                                if (selectedRef.current === selected)
+                                  setTimeline((old) =>
+                                    mergeTimeline(old, value, true),
+                                  );
+                              } catch (e) {
+                                notice((e as Error).message);
+                              }
+                            }}
+                          >
+                            Загрузить предыдущие сообщения
+                          </button>
+                        )}
                         <div className="chat-day">
                           {new Date(
                             timeline.messages[0]?.createdAt ?? conv.createdAt,
@@ -782,7 +848,9 @@ export default function App() {
                                 )}
                                 notes={
                                   timeline.annotations.filter(
-                                    (a) => a.targetId === m.id,
+                                    (a) =>
+                                      a.targetId === m.id ||
+                                      a.externalReference === m.id,
                                   ).length
                                 }
                                 onReply={() => {

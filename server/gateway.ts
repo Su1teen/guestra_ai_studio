@@ -17,6 +17,8 @@ import { MediaService } from "./media.js";
 import { ApiError, requireValue } from "./errors.js";
 export class Gateway {
   private running = false;
+  private polls = new Map<string, Promise<void>>();
+  private lastPoll = new Map<string, number>();
   constructor(
     public db: Database,
     public integrations: Integrations,
@@ -41,6 +43,18 @@ export class Gateway {
       const conv = requireValue(
         await repo.get<Conversation>("conversation_refs", conversationId),
       );
+      if (
+        conv.mode !== "preview" &&
+        (!this.integrations.cfg.sandbox ||
+          !["test", "sandbox"].includes(
+            this.integrations.cfg.environment ?? "production",
+          ))
+      )
+        throw new ApiError(
+          403,
+          "SANDBOX_REQUIRED",
+          "Гостевые записи требуют подтверждённой изолированной среды",
+        );
       if (conv.setupStatus === "SETUP_UNAVAILABLE")
         throw new ApiError(
           409,
@@ -100,7 +114,10 @@ export class Gateway {
           : (await repo.list<Agent>("agent_configurations"))[0],
       );
       const prompt = requireValue(
-        await repo.get<Prompt>("prompt_versions", agent.activeVersionId),
+        await repo.get<Prompt>(
+          "prompt_versions",
+          conv.promptVersionId ?? agent.activeVersionId,
+        ),
       );
       const correlationId = crypto.randomUUID();
       const run = record({
@@ -111,6 +128,8 @@ export class Gateway {
         promptSnapshot: prompt.body,
         model: agent.model,
         workflowId: agent.workflowId,
+        agentId: agent.id,
+        promptHash: createHash("sha256").update(prompt.body).digest("hex"),
         configuration: {
           timeoutMs: agent.timeoutMs,
           maxRetries: agent.maxRetries,
@@ -149,6 +168,33 @@ export class Gateway {
       )[0].sequence;
       attempt.sequence = Number(seq);
       await repo.put("message_attempts", attempt);
+      if (conv.mode === "sandbox") {
+        const identity = requireValue(
+          await repo.get<Identity>("virtual_identities", conv.identityId),
+        );
+        const client = requireValue(
+          await repo.get<Client>("virtual_clients", conv.clientId),
+        );
+        const envelope = this.integrations.envelope(
+          workspace,
+          conv,
+          identity,
+          attempt,
+          client,
+          {
+            versionId: run.promptVersionId,
+            body: run.promptSnapshot,
+            model: run.model,
+            workflowId: run.workflowId,
+            configuration: run.configuration,
+          },
+          attachments,
+        );
+        await repo.patch("agent_runs", run.id, {
+          dispatchHash: envelope.payloadHash,
+          dispatchEnvelope: envelope,
+        });
+      }
       await repo.patch("conversation_refs", conv.id, {
         draft: "",
         lastText: input.text || "Вложение",
@@ -156,8 +202,24 @@ export class Gateway {
       return attempt;
     });
   }
-  async reconcile(repo: Repository, conv: Conversation) {
+  async reconcile(repo: Repository, conv: Conversation): Promise<void> {
+    const key = repo.workspaceId + ":" + conv.id;
+    const pending = this.polls.get(key);
+    if (pending) return pending;
+    if (Date.now() - (this.lastPoll.get(key) ?? 0) < 1500) return;
+    const poll = this.reconcileNow(repo, conv)
+      .then(() => {
+        this.lastPoll.set(key, Date.now());
+        if (this.lastPoll.size > 1000)
+          this.lastPoll.delete(this.lastPoll.keys().next().value!);
+      })
+      .finally(() => this.polls.delete(key));
+    this.polls.set(key, poll);
+    return poll;
+  }
+  private async reconcileNow(repo: Repository, conv: Conversation) {
     if (conv.mode === "preview" || !conv.crmConversationId) return;
+    if (this.integrations.v2) return this.reconcileChanges(repo, conv);
     const identity = requireValue(
       await repo.get<Identity>("virtual_identities", conv.identityId),
     );
@@ -200,16 +262,177 @@ export class Gateway {
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       );
     // Bounded read-only cache; never insert connected messages into preview_messages.
-    for (const m of all.slice(0, -200))
-      await repo.sql.query(
-        "DELETE FROM transcript_snapshots WHERE workspace_id=$1 AND id=$2",
-        [repo.workspaceId, m.id],
-      );
     const latest = all.at(-1);
     await repo.patch("conversation_refs", conv.id, {
       cursor: last,
       lastText: latest?.text ?? conv.lastText,
     });
+  }
+  async reconcileChanges(repo: Repository, conv: Conversation) {
+    const identity = requireValue(
+      await repo.get<Identity>("virtual_identities", conv.identityId),
+    );
+    const scope = this.integrations.scope(conv, identity);
+    for (let page = 0; page < 50; page++) {
+      const fresh = requireValue(
+        await repo.get<Conversation>("conversation_refs", conv.id),
+      );
+      const after = fresh.changesCursor ?? 0;
+      const result = await this.integrations.crmV2.changes(scope, after);
+      await this.db.transaction(async (tx) => {
+        await tx.query(
+          "SELECT id FROM conversation_refs WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+          [repo.workspaceId, conv.id],
+        );
+        const r = new Repository(tx, repo.workspaceId),
+          current = requireValue(
+            await r.get<Conversation>("conversation_refs", conv.id),
+          );
+        if ((current.changesCursor ?? 0) !== after) return;
+        for (const change of result.changes) {
+          const existing = await r.get<Message>(
+            "transcript_snapshots",
+            change.messageId,
+          );
+          if (existing && existing.conversationId !== conv.id)
+            throw new ApiError(
+              409,
+              "IDENTITY_CONFLICT",
+              "CRM message belongs to another conversation",
+            );
+          if (existing && (existing.changeSequence ?? 0) >= change.sequence)
+            continue;
+          if (change.kind === "tombstone") {
+            await r.put("transcript_snapshots", {
+              ...record({}),
+              id: change.messageId,
+              conversationId: conv.id,
+              direction: "inbound" as const,
+              senderType: "guest" as const,
+              text: "",
+              deliveryStatus: "removed",
+              attachments: [],
+              source: "crm" as const,
+              tombstone: true,
+              changeSequence: change.sequence,
+            });
+            continue;
+          }
+          const message = this.integrations.message(conv, change.message!);
+          message.changeSequence = change.sequence;
+          const rows = await tx.query<{ data: Attempt }>(
+            "SELECT data FROM message_attempts WHERE workspace_id=$1 AND conversation_id=$2 AND external_message_id=$3",
+            [repo.workspaceId, conv.id, message.externalMessageId ?? ""],
+          );
+          const attempt = rows[0]?.data;
+          if (attempt && message.direction === "inbound") {
+            message.attachments = message.attachments.map((a) => {
+              const local = attempt.attachments.find(
+                (x) => x.id === a.externalFileId,
+              );
+              return local
+                ? { ...a, id: local.id, scanStatus: local.scanStatus }
+                : a;
+            });
+            await r.patch("message_attempts", attempt.id, {
+              status: "delivered",
+              crmMessageId: message.id,
+            });
+          }
+          await r.put("transcript_snapshots", message);
+        }
+        await r.patch("conversation_refs", conv.id, {
+          changesCursor: result.nextCursor,
+        });
+      });
+      if (!result.hasMore) break;
+    }
+    const context = await this.integrations.crmV2.context(scope);
+    const guests = [
+      ...new Set(context.projections.map((p) => p.snapshot.guestId)),
+    ];
+    if (guests.length > 1)
+      throw new ApiError(
+        409,
+        "IDENTITY_CONFLICT",
+        "Multiple PMS guest references",
+      );
+    if (
+      guests[0] &&
+      ((conv.pmsGuestId && conv.pmsGuestId !== guests[0]) ||
+        (identity.pmsGuestId && identity.pmsGuestId !== guests[0]))
+    )
+      throw new ApiError(
+        409,
+        "IDENTITY_CONFLICT",
+        "Confirmed PMS guest reference changed",
+      );
+    if (conv.crmCustomerId && conv.crmCustomerId !== context.customerId)
+      throw new ApiError(409, "IDENTITY_CONFLICT", "CRM customer changed");
+    await repo.patch("conversation_refs", conv.id, {
+      crmCustomerId: context.customerId,
+      pmsGuestId: guests[0],
+      handoff: !context.aiReplyAllowed,
+    });
+    await repo.patch("virtual_identities", identity.id, {
+      crmCustomerId: context.customerId,
+      ...(guests[0] ? { pmsGuestId: guests[0] } : {}),
+      environment: this.integrations.cfg.environment,
+      verifiedAt: now(),
+      verificationSource: "crm-v2/context",
+    });
+    await repo.put("integration_mappings", {
+      ...record({}),
+      id: "conversation:" + conv.id,
+      workspaceId: repo.workspaceId,
+      environment: this.integrations.cfg.environment,
+      studioClientId: conv.clientId,
+      virtualIdentityId: conv.identityId,
+      externalUserId: identity.externalUserId,
+      externalChatId: conv.externalChatId,
+      crmCustomerId: context.customerId,
+      crmConversationId: conv.crmConversationId,
+      pmsGuestId: guests[0],
+      propertyMapping: conv.propertyMapping,
+      verifiedAt: now(),
+      verificationSource: "crm-v2/context",
+    });
+    const runs = (await repo.list<Run>("agent_runs")).filter(
+      (x) => x.conversationId === conv.id,
+    );
+    const trace = await this.integrations.crmV2.inspector(scope);
+    if (trace.customerId !== context.customerId)
+      throw new ApiError(
+        409,
+        "IDENTITY_CONFLICT",
+        "Inspector customer mismatch",
+      );
+    for (const run of runs) {
+      const events = trace.events.filter(
+        (e) =>
+          e.references.correlationId === run.correlationId ||
+          (e.references.executionReference === run.executionId &&
+            Boolean(run.executionId)),
+      );
+      await repo.patch("agent_runs", run.id, {
+        allowedActions: context.context.allowedActions,
+        tools: events.map((e) => ({
+          id: e.id,
+          name: e.tool,
+          status: e.success ? "accepted" : "failed",
+          durationMs: e.durationMs,
+          summary: ["HTTP " + e.statusCode, e.errorCode]
+            .filter(Boolean)
+            .join(" · "),
+          businessReference:
+            e.references.operationId ?? e.operationReference ?? undefined,
+        })),
+        ...(!context.aiReplyAllowed &&
+        !["completed", "failed", "human_owned"].includes(run.status)
+          ? { status: "human_owned" }
+          : {}),
+      });
+    }
   }
   async tick() {
     if (this.running) return;
@@ -223,7 +446,7 @@ export class Gateway {
           id: string;
           conversation_id: string;
         }>(
-          `SELECT a.workspace_id,a.id,a.conversation_id FROM message_attempts a JOIN conversation_refs c ON c.id=a.conversation_id AND c.workspace_id=a.workspace_id JOIN agent_runs r ON r.id=a.data->>'runId' AND r.workspace_id=a.workspace_id WHERE (a.status IN ('queued','processing','awaiting_crm') OR (a.status='delivered' AND r.data->>'status' IN ('queued','processing','retrying','awaiting_crm','inbound_saved'))) AND a.next_at<=now() AND r.data->>'status' NOT IN ('completion_unknown') AND (c.lease_until IS NULL OR c.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM message_attempts p JOIN agent_runs pr ON pr.id=p.data->>'runId' AND pr.workspace_id=p.workspace_id WHERE p.workspace_id=a.workspace_id AND p.conversation_id=a.conversation_id AND p.sequence<a.sequence AND (p.status IN ('queued','processing','awaiting_crm') OR pr.data->>'status' IN ('awaiting_crm','inbound_saved','completion_unknown'))) ORDER BY a.sequence LIMIT 1 FOR UPDATE OF c SKIP LOCKED`,
+          `SELECT a.workspace_id,a.id,a.conversation_id FROM message_attempts a JOIN conversation_refs c ON c.id=a.conversation_id AND c.workspace_id=a.workspace_id JOIN agent_runs r ON r.id=a.data->>'runId' AND r.workspace_id=a.workspace_id WHERE (a.status IN ('queued','processing','awaiting_crm') OR (a.status='delivered' AND r.data->>'status' NOT IN ('completed','preview_completed','human_owned','failed','inbound_saved_no_orchestrator'))) AND a.next_at<=now() AND r.data->>'status' NOT IN ('completion_unknown') AND (c.lease_until IS NULL OR c.lease_until<now()) AND NOT EXISTS(SELECT 1 FROM message_attempts p JOIN agent_runs pr ON pr.id=p.data->>'runId' AND pr.workspace_id=p.workspace_id WHERE p.workspace_id=a.workspace_id AND p.conversation_id=a.conversation_id AND p.sequence<a.sequence AND pr.data->>'status' NOT IN ('completed','preview_completed','human_owned','failed','inbound_saved_no_orchestrator')) ORDER BY a.sequence LIMIT 1 FOR UPDATE OF c SKIP LOCKED`,
         );
         const row = rows[0];
         if (row)
@@ -264,11 +487,29 @@ export class Gateway {
         ["awaiting_crm", "delivered"].includes(attempt.status) &&
         attempt.tries >= 1 + (run.configuration?.maxRetries ?? 3)
       ) {
-        await repo.patch("agent_runs", run.id, {
-          status: "completion_unknown",
-          error:
-            "Подтверждение завершения не получено. Очередь этого чата приостановлена до signed callback; повтор безопасен с тем же ключом.",
-        });
+        await repo.patch(
+          "agent_runs",
+          run.id,
+          {
+            status: "completion_unknown",
+            error:
+              "Подтверждение завершения не получено. Очередь этого чата приостановлена до signed callback; повтор безопасен с тем же ключом.",
+          },
+          [
+            "queued",
+            "processing",
+            "retrying",
+            "awaiting_crm",
+            "dispatch_accepted",
+            "inbound_saved",
+            "agent_processing",
+            "tool_execution",
+            "business_pending",
+            "business_completed",
+            "reply_prepared",
+            "reply_delivered",
+          ],
+        );
         if (attempt.status !== "delivered")
           await repo.patch("message_attempts", attempt.id, {
             status: "failed",
@@ -403,12 +644,28 @@ export class Gateway {
               },
               media,
               run.configuration?.timeoutMs ?? 15000,
+              run.dispatchEnvelope,
             );
             if (!result.accepted)
               throw new ApiError(
                 502,
                 "WORKFLOW_REJECTED",
                 "n8n не подтвердила приём",
+                true,
+              );
+            const persisted = requireValue(
+              await repo.get<Run>("agent_runs", run.id),
+            );
+            if (
+              !persisted.claim ||
+              persisted.claim.payloadHash !== run.dispatchHash ||
+              result.payloadHash !== run.dispatchHash ||
+              result.runId !== run.id
+            )
+              throw new ApiError(
+                502,
+                "DURABLE_CLAIM_REQUIRED",
+                "n8n acceptance не подтверждён Studio durable claim",
                 true,
               );
             await repo.patch(

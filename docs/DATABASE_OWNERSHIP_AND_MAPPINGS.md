@@ -1,0 +1,15 @@
+# Database ownership and evidence
+
+CRM owns Customers (legacy `guests`), channel identities, conversations/messages, Requests (`leads`), Offers, their lifecycle, transport, mappings, projections, operation receipts and event inbox/outbox. PMS owns Guests, properties/inventory/rates, reservations/stays, services/operational requests, folios/charges/payments/refunds and PMS receipts/events. Studio owns virtual clients/identities, simulations, conversation references, attempts/runs, prompts, tester annotations, media metadata, virtual calls, scenario results and integration audit/configuration.
+
+No CRM Customer/Conversation/Request or PMS Guest/Reservation/Payment/Folio table is added to Studio. Connected transcripts remain guest-only caches in existing `transcript_snapshots`, never authoritative business storage. Studio stores references and evidence; all mutations use authoritative CRM/PMS APIs. No FDW, SQL joins across systems, shared credentials or n8n business SQL.
+
+`virtual_clients.id`, CRM `customerId` and PMS `guestId` are distinct. No phone/name/username-based guest merge. External user identity includes workspace, mode, configured environment/property, Studio client and visual channel. Existing saved identities remain intact. Per-conversation `propertyMapping` pins both property IDs, both tenant IDs and environment. Changing server mapping refuses the old conversation instead of silently moving it.
+
+`integration_mappings` records workspace/environment, Studio client, virtual identity, external user/chat, CRM customer/conversation, verified PMS guest when provided, property mapping, verifiedAt and verificationSource. PMS Guest is accepted only from API-owned projection/fixture evidence. Changing an existing confirmed customer/guest mapping conflicts. No guest reference is invented when none exists upstream.
+
+Fixture endpoints create their own `fixture:<stableId>` simulator user/chat. Studio creates a separate virtual identity pointing to the selected Studio client, binds API-returned CRM/PMS refs, and keeps the original identity. It does not relabel an unrelated customer as that fixture. Setup precedes messaging; expired/retired keys are not recycled.
+
+Migration 003 is additive: one **Studio-only** attestation table, plus transcript ordering and run-hash indexes. Existing JSON records hold changes cursors/sequences, tombstones, frozen envelopes, claims, external execution refs and prompt deployment states. Existing 001/002 tables are reused; business schema is absent. The operator inserts the DB marker separately after ownership/copy validation; startup checks it and all three migration versions without automatic production migration.
+
+Immutable changes pages commit transcript updates and cursor together under a conversation row lock. Old overlapping poll responses cannot roll back a newer cursor. Tombstones remain as reference records so old events cannot resurrect messages or erase annotation targets. Historical messages are paginated, not deleted after 200 rows. The migration/ownership/activation runbook is [RAILWAY_ACTIVATION](RAILWAY_ACTIVATION.md).

@@ -1,4 +1,24 @@
 import { test, expect } from "@playwright/test";
+test("integration screen keeps disconnected services separate from sandbox readiness", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Связи", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Интеграции", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".integration-card .badge")).toHaveCount(3);
+  await expect(page.locator(".integration-card").first()).toContainText(
+    "NOT_CONFIGURED",
+  );
+  await expect(
+    page
+      .locator(".mode-options button")
+      .filter({ hasText: "End-to-End Sandbox" }),
+  ).toBeDisabled();
+  await expect(
+    page.locator(".mode-options button").filter({ hasText: "Local Preview" }),
+  ).toBeEnabled();
+});
 test.beforeEach(async ({ page }, testInfo) => {
   if (testInfo.title.startsWith("recovers login")) return;
   await page.goto("/");

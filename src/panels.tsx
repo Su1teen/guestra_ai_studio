@@ -183,7 +183,8 @@ export function ConversationForm({
   onClose: () => void;
   onDone: (v: Conversation) => void;
 }) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""),
+    [selectedAgent, setSelectedAgent] = useState(data.agents[0]?.id);
   return (
     <Modal title="Новый разговор" onClose={onClose}>
       <form
@@ -191,6 +192,7 @@ export function ConversationForm({
         onSubmit={async (e) => {
           e.preventDefault();
           const f = new FormData(e.currentTarget);
+          if (!f.get("promptVersionId")) f.delete("promptVersionId");
           try {
             onDone(
               await api<Conversation>(
@@ -224,12 +226,34 @@ export function ConversationForm({
         </label>
         <label>
           Агент
-          <select name="agentId">
+          <select
+            name="agentId"
+            value={selectedAgent}
+            onChange={(e) => setSelectedAgent(e.target.value)}
+          >
             {data.agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          Версия промпта
+          <select name="promptVersionId" key={selectedAgent}>
+            <option value="">Активная версия Studio</option>
+            {data.prompts
+              .filter(
+                (p) => p.agentId === selectedAgent && p.status !== "draft",
+              )
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  Версия {p.version}
+                  {p.status === "test"
+                    ? " · тестовая"
+                    : " · опубликована в Studio"}
+                </option>
+              ))}
           </select>
         </label>
         <div className="field-grid">
@@ -492,10 +516,9 @@ export function ScenarioPanel({
               </select>
             </label>
             <div className="form-hint">
-              Сценарий создаст отдельный чат.{" "}
-              {run.stage === "new_contact"
-                ? "Для нового гостя setup не требуется."
-                : "Без fixture API реальная интеграция вернёт SETUP_UNAVAILABLE."}
+              Сценарий создаст отдельный чат. В Sandbox готовность требует
+              подтверждённого CRM/PMS fixture. В Local Preview бизнес-данные не
+              создаются.
             </div>
             {error && <p className="error">{error}</p>}
             <footer>
@@ -779,8 +802,11 @@ export function AgentPanel({ data, refresh, notice }: Common) {
                 )}
               </div>
               <small>
-                {v.status === "draft" ? "Черновик" : "Опубликована"} ·{" "}
-                {v.author}
+                {v.deploymentState ??
+                  (v.status === "draft"
+                    ? "LOCAL_DRAFT"
+                    : "STUDIO_PUBLISHED")}{" "}
+                · {v.author}
               </small>
               <small>
                 {new Date(v.createdAt).toLocaleDateString("ru-RU")} ·{" "}
@@ -809,6 +835,28 @@ export function AgentPanel({ data, refresh, notice }: Common) {
               {selected.status === "draft"
                 ? "Publish в Studio"
                 : "Rollback к версии"}
+            </button>
+          )}
+          {data.user.role === "admin" && selected?.status === "draft" && (
+            <button
+              className="button secondary"
+              disabled={busy || body !== selected.body}
+              onClick={async () => {
+                try {
+                  await api(
+                    "/prompts/" + selected.id + "/test-version",
+                    "POST",
+                  );
+                  await refresh();
+                  notice(
+                    "Тестовая версия зафиксирована. Её можно выбрать при создании разговора.",
+                  );
+                } catch (e) {
+                  notice((e as Error).message);
+                }
+              }}
+            >
+              Зафиксировать тестовую версию
             </button>
           )}
         </aside>
@@ -914,6 +962,8 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
       mappingReady: boolean;
       promptSync: string;
       mappings: unknown[];
+      database?: { status: string; ready: boolean };
+      mediaScanner?: string;
     }>(),
     [busy, setBusy] = useState(false);
   const check = async () => {
@@ -935,7 +985,10 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
         <div>
           <div className="eyebrow">ENVIRONMENT & CONNECTIONS</div>
           <h1>Интеграции</h1>
-          <p>Тестовая среда с явными границами ответственности.</p>
+          <p>
+            Развёрнутый сервис станет подключённой интеграцией после проверки
+            доступа, среды и возможностей API.
+          </p>
         </div>
         <button
           className="button secondary"
@@ -972,7 +1025,7 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
               <h3>{c.name.toUpperCase()}</h3>
               <span
                 className={
-                  "status-dot " + (c.status === "ready" ? "online" : "")
+                  "status-dot " + (c.status === "CONNECTED" ? "online" : "")
                 }
               />
             </div>
@@ -995,6 +1048,17 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
         ))}
       </div>
       <h2 className="section-title">Режим новых разговоров</h2>
+      <p>
+        База Studio:{" "}
+        {state?.database?.ready
+          ? "проверена"
+          : (state?.database?.status ?? "проверяется")}
+        . Проверка файлов:{" "}
+        {state?.mediaScanner === "CONFIGURED_NOT_VERIFIED"
+          ? "настроена; требуется тест"
+          : "не настроена"}
+        .
+      </p>
       <div className="mode-options">
         {(["preview", "crm", "sandbox"] as const).map((mode) => (
           <button
@@ -1039,7 +1103,9 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
             разрешённые HTTPS hosts. Режим существующих чатов сохраняется.
           </p>
           <p>
-            Prompt sync · Trace reader · STT/TTS · SIP/PBX: <b>не подключены</b>
+            Синхронизация промпта с n8n и голосовые провайдеры:{" "}
+            <b>не подключены</b>. Inspector получает подтверждённые события CRM
+            v2 при доступной интеграции.
           </p>
           <details>
             <summary>Property mapping</summary>
@@ -1316,6 +1382,20 @@ export function InspectorPane({
           <dd>{c.handoff ? "Active" : "Нет"}</dd>
         </div>
       </dl>
+      <dl>
+        <div>
+          <dt>CRM Customer</dt>
+          <dd>{c.crmCustomerId ?? "Не подтверждён"}</dd>
+        </div>
+        <div>
+          <dt>PMS Guest</dt>
+          <dd>{c.pmsGuestId ?? "Не подтверждён"}</dd>
+        </div>
+        <div>
+          <dt>Changes cursor</dt>
+          <dd>{c.changesCursor ?? "Legacy / Preview"}</dd>
+        </div>
+      </dl>
       <h3>
         Agent runs <span>{timeline.runs.length}</span>
       </h3>
@@ -1364,6 +1444,61 @@ export function InspectorPane({
                 </div>
               </dl>
               {run.error && <p className="error">{run.error}</p>}
+              <dl>
+                <div>
+                  <dt>n8n execution</dt>
+                  <dd>{run.executionId ?? "Не подтверждён"}</dd>
+                </div>
+                <div>
+                  <dt>Workflow version</dt>
+                  <dd>{run.workflowVersion ?? "Не подтверждена"}</dd>
+                </div>
+                <div>
+                  <dt>Deployment</dt>
+                  <dd>{run.deploymentId ?? "Не подтверждён"}</dd>
+                </div>
+                <div>
+                  <dt>Business operation</dt>
+                  <dd>
+                    {run.businessOperationId ?? "Нет"} ·{" "}
+                    {run.businessStatus ?? "Нет receipt"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Prompt hash</dt>
+                  <dd className="mono">
+                    {run.promptHash ?? "Legacy snapshot"}
+                  </dd>
+                </div>
+              </dl>
+              {run.businessOperationId && (
+                <button
+                  className="button secondary full"
+                  onClick={() =>
+                    onNote({
+                      type: "operation",
+                      id: run.businessOperationId!,
+                      label: "Бизнес-операция",
+                    })
+                  }
+                >
+                  Заметка к операции
+                </button>
+              )}
+              {run.deploymentId && (
+                <button
+                  className="button secondary full"
+                  onClick={() =>
+                    onNote({
+                      type: "deployment",
+                      id: run.deploymentId!,
+                      label: "Версия workflow",
+                    })
+                  }
+                >
+                  Заметка к workflow
+                </button>
+              )}
               {["failed", "completion_unknown"].includes(run.status) && (
                 <button
                   className="button secondary full"

@@ -35,6 +35,9 @@ export interface Timeline {
   calls: Call[];
   connectionError?: string;
   cached: boolean;
+  olderCursor?: string;
+  hasOlder?: boolean;
+  removedMessageIds?: string[];
 }
 export async function api<T>(
   path: string,
@@ -107,6 +110,9 @@ export const stageLabels: Record<string, string> = {
   service_only: "Только услуги",
   post_stay: "После выезда",
   returning_guest: "Повторный гость",
+  due_out: "Выезд сегодня",
+  cancelled: "Бронь отменена",
+  human_handoff: "Передача сотруднику",
 };
 export const modeLabels: Record<Mode, string> = {
   preview: "Local Preview",

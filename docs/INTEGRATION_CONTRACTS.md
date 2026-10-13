@@ -1,70 +1,39 @@
-# Studio ↔ n8n ↔ CRM ↔ PMS
+# Studio integration contracts
 
-Contract `studio-gateway-v1`, аудит 13 октября 2026. n8n workflow не подключён; ниже контракт следующей интеграционной поставки.
+Studio owns virtual clients/identities, simulation references, attempts/runs, prompts, annotations, media metadata, calls and test results. CRM owns guest business context/conversations/commercial Requests/Offers; PMS owns operational hotel state. No cross-database SQL or duplicated hotel tables. See [DATABASE_OWNERSHIP_AND_MAPPINGS](DATABASE_OWNERSHIP_AND_MAPPINGS.md).
 
-## Ownership / identity
+Preview is persisted local simulation and labels template responses. CRM Connected has one Studio simulator inbound owner and authoritative transcript, without inventing an AI reply. End-to-End Sandbox delegates inbound ownership to the future n8n workflow. Saved conversation modes remain intact; display channels do not create real provider accounts.
 
-CRM owns Customer/channel identities/conversation/messages/Request/Offer/sales lifecycle/handoff. PMS owns Guest/inventory/rates/Reservation/Stay/services/guest requests/Folio/payment facts. n8n owns execution, context, permitted tools and replies. Studio owns simulation/review/prompt registry/media/calls. Прямые записи Studio/n8n в CRM/PMS PostgreSQL запрещены.
+## Discovery and scope
 
-`displayChannel=whatsapp|telegram|instagram|web`; `transportChannel=simulator`. Stable externalUserId: `studio:<workspace>:<mode>:<clientUUID>:<displayChannel>`. Каждый чат получает `studio:chat:<UUID>`, каждое сообщение UUID, immutable payload hash и correlationUUID. CRM channel identity и update ID глобальны — namespace обязателен. Телефон/username остаются визуальными полями и не передаются для автоматического matching. Имена и language передаются allowlist полями. Customer↔Guest links только explicit verified mappings, phone match недостаточен.
+Existing environment keys are preserved. Default CRM version is v2; explicit CRM_API_VERSION=v1 permits the legacy simulator/transcript contract. Incompatible v2 never falls back. Credentials stay server-side. Exact HTTPS host allowlist does not attest sandbox; expected environment/property/tenant/deployment and features are independently checked.
 
-Property mapping: Studio label LES Боровое ↔ CRM text `CRM_PROPERTY_ID` ↔ PMS UUID `PMS_PROPERTY_ID`; никаких угадываний ID. Один deployment конфигурирует одну тестовую property; дополнительные credentials требуют environment configuration provider.
+CRM base /api/integrations/agent, x-crm-api-key. PMS base /api/v1/connect, x-api-key, read-only discovery. Optional upstream SQL/runtime flags are required. AUTH_FAILED, DATABASE_NOT_ATTESTED, INTEGRATION_DISABLED, CONTRACT_MISMATCH and ENVIRONMENT_MISMATCH remain distinct. CONNECTED means verified discovery, not E2E. Sandbox sending additionally requires explicit isolated test/sandbox opt-in, mapping, signed callback credential, approved workspaces/workflow and Studio DB readiness. Supplied production services cannot receive simulator/business writes.
 
-## Single inbound owner
+## Messaging and identity
 
-| Mode    | Inbound owner             | Reply source                         |
-| ------- | ------------------------- | ------------------------------------ |
-| preview | Studio preview repository | Явный deterministic template, не LLM |
-| crm     | Studio Gateway            | Только CRM transcript, без fake AI   |
-| sandbox | n8n                       | CRM transcript после outbound result |
+POST /messages/inbound preserves simulator/property/externalUserId/externalChatId/externalMessageId/externalUpdateId/text/profile/attachment metadata. Phone/name/username never proves PMS identity. V2 context validates customer/conversation/property and safe verified projection refs; inspector strips unknown metadata/notes. See [CRM_V2_ADAPTER](CRM_V2_ADAPTER.md).
 
-Режим существующего разговора неизменяем. UI допускает sending bubble, но delivered появляется лишь после authoritative read-back; preview показывает local persistence.
+Immutable guest-message-changes-v1 pages persist cursor/snapshots together; duplicate and overlapping polls are safe. Delivery/media replace same message ID, tombstones remain as annotation references. History is paginated, not deleted after 200 rows. Explicit v1 retains paged reconciliation/note filtering.
 
-## CRM adapter: фактический v1
+## studio-gateway-v1
 
-Base `/api/integrations/agent`, header `x-crm-api-key`. Discovery `GET /capabilities`: agent-api-v1, simulator, conversation polling.
+Existing envelope keys remain, with frozen property scope/externalMessageId/canonical payloadHash. Only ephemeral media URLs are excluded from hash. Authenticated n8n claim commits existing agent_runs before acceptance; same payload returns existing run, changed payload conflicts; per-conversation logical order is enforced. Acceptance requires a claim actually present in Studio PostgreSQL.
 
-`POST /messages/inbound` передаёт `{channel:'simulator',propertyId,externalUserId,externalChatId,externalMessageId,externalUpdateId:correlationId,firstName,lastName,displayName,language,text,attachments}`. Attachment: `{externalFileId:studioAssetId,kind,mimeType,fileName,fileSize}`. Response `{duplicate,messageId,context:{conversation:{id}},aiReplyAllowed,allowedActions}`. Duplicate сохраняет исходные IDs; changed payload under same key — conflict. Studio не отправляет inbound повторно через параллельный owner.
+HMAC callbacks use immutable event ID, matching claimed execution/correlation and monotonic sequence. Separate dispatch/inbound/agent/tool/business/reply/final states. Human ownership is sticky; unknown business completion blocks another logical operation. Callback storage survives CRM outage; polling reconciles later. Business completion independently checks CRM receipt; guest delivery comes only from CRM changes. Full node/protocol/retry design: [N8N_WORKFLOW_BLUEPRINT](N8N_WORKFLOW_BLUEPRINT.md).
 
-Transcript `GET /conversations/:id/messages?channel=simulator&propertyId=…&externalUserId=…&after=<messageId>&limit=100` → `{messages,nextCursor}`. Mapper пропускает только in/out, исключает internal note, contact inbound → guest. Null cursor означает drained page. Raw note-only pages также продвигают cursor. CRM sentAt mutable: выполняется полное paged merge by CRM ID, cache — 200 guest messages. Выше 5000 raw records возвращается честный `RECONCILIATION_WINDOW_EXCEEDED`; нужен immutable changes cursor.
+CRM facade is the only business tool route. Neither Studio nor n8n receives PMS_COMMAND_SECRET or direct business SQL/write credentials. CRM/PMS retain consent, delivered proposal, current ownership, allowed tools, price/revision/property and idempotency guarantees. Pending/HTTP200 is not success.
 
-`POST /messages/outbound/prepare` оставляет pending и не отправляет simulator автоматически. Workflow обязан вызвать `/messages/outbound/result` с success:true и stable simulator message reference. HTTP200 с success:false — ошибка доставки. Studio не превращает webhook acceptance в guest delivery.
+## Fixtures, prompts, media and voice
 
-## n8n envelope / callback
+Scenario setup uses stable persisted fixture ID, exact CRM body and upstream-created fixture identity bound to selected virtual client. API read-back precedes READY; unavailable setup preserves Preview. Replay/retire/simulated payment: [SCENARIO_FIXTURE_LIFECYCLE](SCENARIO_FIXTURE_LIFECYCLE.md).
 
-`POST N8N_WEBHOOK_URL`, bearer N8N_TOKEN, Idempotency-Key `<workspace>:<conversation>:<externalMessageId>`. Envelope: `{contractVersion:'studio-gateway-v1',environment:'sandbox',workspaceId,conversationId,runId,correlationId,inboundOwner:'n8n',inbound,media,prompt}`. Prompt snapshot includes versionId/body/model/workflowId/configuration(timeout/retries/tools/flags). Annotations исключены.
+Studio publish is local. Separate deployment lifecycle and injectable PromptPublisher require active hash/version/deployment read-back; default external publisher stays disconnected. [PROMPT_DEPLOYMENT_CONTRACT](PROMPT_DEPLOYMENT_CONTRACT.md).
 
-Workflow durably регистрирует idempotency key **до** scheduling и отвечает `{accepted:true}`. Replay принимает existing execution и повторяет latest callback; business tools не выполняются заново. На timeout Studio повторяет исходный key/envelope. Каждая PMS mutation дополнительно требует native operation idempotency, особенно платежи.
+Media uses workspace ownership, MIME/magic/20MiB validation, clean scanner requirement and five-minute purpose-signed URLs. Active claimed run may exchange only its own clean assets. CRM v2 reference/url methods prepare remote registration/retrieval; absent/processing/expired media is not falsely playable. Real scanner/storage/agent-origin binary preparation require configuration and external E2E.
 
-Capability URL возвращает `{contractVersion:'studio-gateway-v1',environment:'sandbox',inboundOwner:'n8n'}`. Workflow проверяет simulator/environment, сохраняет inbound один раз, загружает CRM context (sanitize notes), проверяет aiReplyAllowed/allowedActions, направляет operations в PMS, подготавливает/подтверждает outbound, затем сообщает completion.
+Persistent virtual calls stay separate from telephony. SpeechAdapter and VoiceSessionAdapter prepare session/ordered speaker segments/authorized audio/STT/TTS/completion and CRM references, without live provider calls. Notes may target local attempts/runs, then bind verified external refs without replacing local ID; they never become guest messages/LLM input.
 
-Callback `POST /api/integrations/n8n/events`, raw application/json:
+## Activation
 
-```json
-{
-  "eventId": "UUID",
-  "workspaceId": "les-sandbox",
-  "runId": "studio-run-id",
-  "correlationId": "UUID",
-  "crmConversationId": "crm-id",
-  "state": "completed"
-}
-```
-
-States inbound_saved/completed/human_owned/failed. Failed может не иметь CRM conversation; errorCode безопасный code без PII. Header x-studio-timestamp = Unix seconds; x-studio-signature = hex HMAC-SHA256(secret, timestamp + '.' + exact raw JSON). ±300sec window. Уникальные receipts и row locks обеспечивают replay и monotonic terminal states. Completed/human_owned не откатываются inbound_saved. Callback сам не подтверждает guest delivery — далее читается CRM.
-
-Delivery и execution — отдельные durable states. Per-conversation lease сериализует очередь; разные чаты независимы. Lost callbacks приводят к bounded replay с исходными ключами; unresolved acceptance → completion_unknown, блокируя дальнейший execution этого чата до authoritative completion/recovery. Нельзя снять блокировку ради второй потенциальной booking/payment.
-
-## PMS / fixture / future adapters
-
-Base `/api/v1/connect`, x-api-key. Фактическая версия **v1**, integrationContextSupported/idempotencySupported=true. Используйте property-bound key; read-back `/properties` должен подтвердить UUID. Static `/api/v1/health` — liveness, не проверка БД/оплаты/event delivery. PMS booking paymentStatus=authorized не доказывает provider-backed payment fact.
-
-ScenarioSetupAdapter.prepare({workspaceId,stage,externalUserId,crmPropertyId,pmsPropertyId}) → {status,reason,references}. READY требует authoritative read-back identity/property/reservation/payment/stay. Default UnavailableScenarioSetup возвращает SETUP_UNAVAILABLE. Только new_contact подключён без fixtures; advanced preview=PREVIEW_ONLY. Staff JWT/test fixture provider должен быть sandbox-only с стабильным key/cleanup policy. Нельзя исполнять fixtures в production.
-
-CRM attachment metadata не включает binaries. Studio ObjectStorage+metadata validate magic/MIME/20MB, authorizes upload, выдаёт signed URLs с workspace/id/purpose/5min expiry. Workflow требует scanStatus clean. После match externalMessageId mapper использует исходные Studio asset refs; CRM IDs отличаются. Agent-origin outbound media не поддерживается текущим API и не заявлен завершённым.
-
-Prompt publish/rollback — только immutable Studio registry/audit; PromptPublisher future interface должен возвращать deploymentId/readBackHash. TraceReader future interface — sanitized read-only summaries/timings/status/business refs, без keys/tokens/hidden reasoning. Отсутствующие tool calls не выдумываются. Calls: persistent virtual incoming/outgoing sessions, transitions/duration/turns/audio/run/comments; SpeechAdapter STT/TTS interfaces без SIP/PBX/realtime/provider.
-
-## Authentication / errors
-
-Studio error `{error:{code,message,retryable,correlationId}}`. Zod, role и workspace validation применяются server-side. Непредвиденные ошибки не возвращают stack/credential/body. Upstream HTTP summaries сохраняют retryability (включая CRM409). HTTPS host allowlist + explicit sandbox attestation обязательны; redirects запрещены. Credentials никогда не возвращаются frontend/audit/snapshots. Discovery проверяет совместимость контракта, но не заменяет сквозные тесты из gaps-документа.
+Error shape stays {error:{code,message,retryable,correlationId}}; secrets/raw upstream bodies are excluded. RBAC/workspace scoping remains server-side. Railway startup verifies own DB/migration/attestation, defaults to no automatic production migrations and listens on PORT=8080. [RAILWAY_ACTIVATION](RAILWAY_ACTIVATION.md) lists every operator variable/credential/property input. Local contract PASS is not external n8n/PMS E2E: [E2E_TEST_PLAN](E2E_TEST_PLAN.md).

@@ -1,33 +1,35 @@
-# Foundation delivery — 13 октября 2026
+# Studio integration-ready delivery — 14 October 2026
 
 ## IMPLEMENTED
 
-React/Vite guest messenger с адаптивными layouts, виртуальными клиентами, отдельными чатами/каналами, поиском/фильтрами, saved drafts, reply/copy/message menus, safe links, confirmed sending states и backend processing indicator. Review panel: message/conversation/run/tool/call annotations, author/severity/type/flags, revision history, resolve/reopen, verdict. Inspector отделён от гостевого экрана.
+Only AI Studio is changed, on codex/studio-integration-ready from Studio main eeea318. CRM aea5405/PMS 0dc4ade contracts and optional SQL were audited from read-only main snapshots. Exact v2 capabilities/context/search/offers/booking/services/availability/actions/guest-requests/receipts/changes/inspector/fixture/media adapter contracts are implemented with runtime schemas and explicit environment/property/tenant evidence. Legacy v1 simulator/transcript remains an explicit mode without silent downgrade.
 
-Express API, PostgreSQL16-compatible SQL migrations, pg server adapter, local durable PGlite, repository/service layers, runtime validation, scrypt auth/session/RBAC/workspace isolation, readiness/structured error logs. Durable attempts/sequence/leases, immutable idempotency payload, retries/backoff, asynchronous callback receipts and monotonic run states. Separate preview transcript and bounded read-only CRM cache.
+Immutable changes cursor, duplicate/update/tombstone/paged history and separate delivery/execution/business states reuse existing transcript_snapshots/conversation_refs/message_attempts/agent_runs. Workspace/virtual identity/CRM customer/PMS guest stay distinct; fixture-created identity is bound to selected virtual client only after API evidence. No hotel business tables are added.
 
-Agent registry/configuration, PostgreSQL prompt drafts/history/diff, immutable published versions, local publish/rollback audit and per-run prompt/config snapshot. Scenarios and persisted assertions with truthful PREVIEW_ONLY/SETUP_UNAVAILABLE states. Media metadata/object-storage abstraction, actual local uploads/previews/downloads, magic/MIME/size validation, HMAC URLs/scanner hook/retention. Virtual call sessions/transitions/logs/duration/turns/audio/run linkage/comments.
+Gateway keeps studio-gateway-v1 with frozen scope/hash/prompt/media references. Authenticated SQL claims, immutable signed sequenced events, logical run ordering and same-key recovery handle duplicate/lost responses. Unknown business completion suspends further execution; completed business state requires CRM authoritative receipt. Human takeover stays sticky. Tester notes bind stable local targets to verified external refs and never leak to guest/LLM.
 
-Dockerfile, Railway configuration, compose PostgreSQL, env template, CI, setup/API/integration/deployment docs. Related repository code audited read-only, precise gap matrices prepared.
+Prompt lifecycle now separates draft/test/Studio-published/pending/n8n-deployed/failed/rollback, with immutable selectable test versions and injected PromptPublisher active hash read-back. Inspector preserves sanitized HTTP/errors/timing/external refs. Existing Messenger, guest accounts/search/composer/links/media/review, Local Preview and persistent virtual calls are retained; earlier history is paginated. Speech/VoiceSession and CRM media contracts prepare future providers without real telephony.
 
-## VERIFIED
+## DATABASE CHANGES / REUSED
 
-Local typecheck, 25 API/security/idempotency/persistence tests and production build passed. The 8 browser acceptance tests on desktop/mobile cover temporary API unavailability recovery, guest/chat creation, draft after reload, send/safe link, annotations/resolve, prompt history/diff, virtual call turns, image lightbox, PDF download and actual WAV playback. Local browser execution uses installed Edge; CI uses Chromium and PostgreSQL 16. Final browser/CI status is recorded in the PR description after execution. npm audit reports zero known dependency vulnerabilities for the delivery lockfile.
+Additive 003_integration_readiness.sql adds Studio-only database attestation and transcript/run indexes. All original business-independent tables remain: identities, conversations refs, attempts/runs, transcript cache, integration_mappings/configuration, prompts, scenario_runs, annotations, media/calls/audit. JSON records hold cursors/sequences/tombstones/claims/frozen snapshots/refs/deployment state. No tables renamed/dropped; no CRM/PMS/n8n database connected, migrated or modified. Production startup defaults to no automatic migrations and requires independently verified own DB marker; manual migrate requires explicit approval/owner. Any DATABASE_URL, even local mode, passes ownership checks.
 
-Related CRM/PMS findings verified by static source reading at pinned commits; live endpoints/business operations were not executed. UI inspected in the browser; initial draft/selection reload and async state races were corrected.
+## TESTED
 
-## READY FOR INTEGRATION
+Local typecheck, 55 SQL/contract/regression tests on isolated embedded PostgreSQL and production build passed. Desktop/mobile browser acceptance: 10 tests passed (Messenger/login/draft/review/prompt/calls/image/PDF/audio/disconnected integrations). Browser tests explicitly clear external DB/API/scanner endpoints and use a dedicated local database. TEST_DATABASE_URL rejects nonloopback/non-test names. GitHub CI uses disposable PostgreSQL 16 studio_test in addition to browser tests; check the PR CI for the final server-database result. No fixture/mock PASS is claimed as real external E2E.
 
-Actual CRM Agent API inbound/transcript adapter with simulator identity separation, one inbound owner per mode, staff note filtering and original media ref overlay. PMS/n8n capability adapters, signed callback envelope, scenario/trace/prompt/STT/TTS interfaces and exact ownership/replay/error contracts. New connected modes are gated by explicit sandbox config and discovery.
+## READY FOR CONFIGURATION
 
-## NOT CONNECTED
+[RAILWAY_ACTIVATION](RAILWAY_ACTIVATION.md) and [guestra_ai_studio_railway.env](../guestra_ai_studio_railway.env) list exact variables, separate scoped credentials, both property/tenant IDs and DB marker/migration/media prerequisites. Read-only Railway inspection confirmed Studio main source, successful deployed service, domain target 8080 and existing dedicated postgres_ai_studio service. OAuth exposed variable names only; actual values/DB ownership/auth/migration/capabilities were not verified. No media volume was attached at inspection. Server uses PORT with nonlocal default 8080.
 
-CRM/PMS/n8n endpoints and credentials, real LLM/model execution, workflow prompt publication/read-back, trace API, advanced scenario fixture provider, S3/R2 backend, malware scanner service, real outbound agent media, SIP/PBX/STT/TTS/realtime audio. Current Local Preview uses explicit templates. Publish updates only Studio registry. No production deployment/migration/merge performed.
+## REQUIRES N8N
 
-PostgreSQL 16 checks are configured in CI; their final status is recorded in the PR after execution. Local verification uses PGlite unless a separate TEST_DATABASE_URL is supplied. Railway runtime and container startup are not claimed verified by local build alone. LocalStorage needs a durable volume; physical retention cleanup is a storage lifecycle extension. Transcript reconciliation reports a 5000-record bound honestly until CRM changes cursor exists. Multi-workspace account switching, self-registration and workflow trace ingestion remain extensions to the foundation.
+[N8N_WORKFLOW_BLUEPRINT](N8N_WORKFLOW_BLUEPRINT.md) defines dedicated trigger/claim/fast response/context/model/tool/receipt/delivery/callback/capability/error workflows and credentials using official n8n docs. Real workflow and admin publication client are intentionally not created. Default publisher reports pending/WORKFLOW_NOT_DEPLOYED. Build against installed n8n version, preserve existing Telegram/unrelated workflows, connect over authenticated HTTPS across Railway projects, verify active prompt hash and run [E2E_TEST_PLAN](E2E_TEST_PLAN.md).
 
-## REQUIRES CRM/PMS CHANGES
+## REQUIRES SANDBOX
 
-PMS-only operational authority; explicit Request/Offer↔PMS refs and verified Customer↔Guest mapping; first accommodation identity-link fix; provider-backed payment/status/link API; preserve manual takeover; scoped credentials/discovery; real signed event delivery/immutable cursor; no internal notes in guest/context APIs; immutable transcript changes feed; outbound media and read-only tool traces; sandbox fixture endpoints; complete mutation idempotency/revision handling. Full existing/expected/source/owner/compatibility/test analysis: [CRM_PMS_INTEGRATION_GAPS](CRM_PMS_INTEGRATION_GAPS.md).
+Dedicated test/sandbox CRM/PMS/Studio DBs, upstream optional migrations/feature flags/deployment markers, registered property/tenant/staff/room/rate/service fixtures and scoped keys remain operator tasks. Stage READY requires actual fixture/API read-back. Payment simulation stays source=simulated/ledgerEffect=false/providerVerified=false. Scanner, durable storage/agent media transport and real voice providers need separate configuration/E2E. Inspector exposes sanitized upstream facts; pinned upstream does not provide raw safe arguments, and no fabricated tool calls/reasoning are shown.
 
-Development branch feat/studio-foundation, minimal main bootstrap 107a7a3. Source delivery is prepared as a draft PR; no external integration is presented as complete.
+## PRODUCTION NOT VERIFIED
+
+Supplied live URLs stay production; STUDIO_SANDBOX=true alone cannot activate fixtures/writes. Live Railway variables/domains/deployments, CRM/PMS business DBs and all n8n workflows were untouched. No main merge or production deployment. External n8n/AI/CRM/PMS/consent/ledger/provider tests remain EXTERNAL_E2E_PENDING. Review additive rollout/variables and green PostgreSQL/browser CI before a separately approved merge.
