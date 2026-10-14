@@ -419,6 +419,46 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => db.close());
+it("never marks a fixture READY with malformed upstream expiry", async () => {
+  const conv = await chat("sandbox"),
+    scenario = (await repo.list<{ id: string }>("test_scenarios"))[0];
+  const run = record({
+    scenarioId: scenario.id,
+    conversationId: conv.id,
+    status: "SETUP_UNAVAILABLE" as const,
+    reason: "",
+    references: {},
+    assertions: [],
+  });
+  await repo.put("scenario_runs", run);
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/sandbox/fixtures")) {
+      const body = JSON.parse(String(init?.body));
+      return json({
+        contractVersion: "guestra-fixtures-v1",
+        propertyId: cfg.crmProperty,
+        pmsPropertyId: cfg.pmsProperty,
+        fixtureId: body.fixtureId,
+        stage: body.stage,
+        customerId: "crm-customer",
+        conversationId: "crm-fixture",
+        externalUserId: "fixture:" + body.fixtureId,
+        expiresAt: "not-a-date",
+        refs: { guestId },
+        snapshots: [],
+        simulatedPayment: null,
+      });
+    }
+    return fakeTransport(input, init);
+  });
+  await expect(
+    platform.fixtures.prepare(repo.workspaceId, run.id),
+  ).rejects.toMatchObject({ code: "CONTRACT_MISMATCH" });
+  expect((await repo.get<ScenarioRun>("scenario_runs", run.id))?.status).toBe(
+    "SETUP_UNAVAILABLE",
+  );
+});
 it("maps legacy tool names before intersecting authoritative action permission", () => {
   expect(
     approvedTools(

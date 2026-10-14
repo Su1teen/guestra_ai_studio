@@ -16,7 +16,7 @@ Additive 003_integration_readiness.sql adds Studio-only database attestation and
 
 ## TESTED
 
-Local typecheck, 55 SQL/contract/regression tests on isolated embedded PostgreSQL and production build passed. Desktop/mobile browser acceptance: 10 tests passed (Messenger/login/draft/review/prompt/calls/image/PDF/audio/disconnected integrations). Browser tests explicitly clear external DB/API/scanner endpoints and use a dedicated local database. TEST_DATABASE_URL rejects nonloopback/non-test names. GitHub CI uses disposable PostgreSQL 16 studio_test in addition to browser tests; check the PR CI for the final server-database result. No fixture/mock PASS is claimed as real external E2E.
+Local typecheck, 56 SQL/contract/regression tests on isolated embedded PostgreSQL and production build passed. Desktop/mobile browser acceptance: 10 tests passed (Messenger/login/draft/review/prompt/calls/image/PDF/audio/disconnected integrations). Browser tests explicitly clear external DB/API/scanner endpoints and use a dedicated local database. TEST_DATABASE_URL rejects nonloopback/non-test names. GitHub CI uses disposable PostgreSQL 16 studio_test in addition to browser tests; check the PR CI for the final server-database result. No fixture/mock PASS is claimed as real external E2E.
 
 ## READY FOR CONFIGURATION
 

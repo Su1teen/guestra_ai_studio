@@ -359,7 +359,7 @@ export const fixtureSchema = z.object({
   conversationId: id,
   requestId: id.nullish(),
   externalUserId: id,
-  expiresAt: z.string(),
+  expiresAt: z.string().datetime({ offset: true }),
   refs: z.object({
     guestId: z.string().uuid(),
     reservationId: z.string().uuid().optional(),
