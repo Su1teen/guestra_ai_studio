@@ -106,6 +106,12 @@ export class MediaService {
     const kind = detectMedia(bytes, mime);
     let scanStatus: Asset["scanStatus"] = "local_unscanned";
     if (this.cfg.scannerUrl) {
+      if (!this.cfg.scannerToken)
+        throw new ApiError(
+          503,
+          "MEDIA_SCANNER_NOT_CONFIGURED",
+          "Scanner credential required",
+        );
       const response = await fetch(
         permittedUrl(this.cfg.scannerUrl, this.cfg),
         {
@@ -167,6 +173,7 @@ export class MediaService {
   ) {
     if (
       !["view", "workflow"].includes(purpose) ||
+      !Number.isSafeInteger(expiry) ||
       expiry < Date.now() / 1000 ||
       expiry > Date.now() / 1000 + 301
     )
@@ -182,6 +189,7 @@ export class MediaService {
     const asset = await repo.get<Asset>("media_assets", id);
     if (!asset) throw new ApiError(404, "MEDIA_NOT_FOUND", "Файл не найден");
     if (
+      !Number.isFinite(Date.parse(asset.expiresAt)) ||
       Date.parse(asset.expiresAt) < Date.now() ||
       asset.scanStatus === "quarantined"
     )

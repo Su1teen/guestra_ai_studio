@@ -21,7 +21,7 @@ Dev-сессия разрешена только при `LOCAL_PREVIEW=true`, в
 
 Создайте отдельную БД Studio, **не БД CRM/PMS**. Скопируйте `.env.example` в `.env`; задайте `DATABASE_URL`, `MEDIA_SIGNING_SECRET` (32+ случайных символа), `PUBLIC_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` (12+ символов). Сервер читает `.env`. `npm run dev` явно включает локальную среду. Для обычной авторизации: `npm run build`, затем `npm start` с `LOCAL_PREVIEW=false`.
 
-Миграции и bootstrap применяются при старте сервера; для отдельного development запуска есть `npm run db:migrate`, `npm run bootstrap`. Для PostgreSQL в Docker есть `compose.yaml`: задайте собственный `POSTGRES_PASSWORD`, порт 5433 открыт только на loopback.
+Railway использует `PORT=8080`. Production startup проверяет принадлежность Studio DB, установленные миграции и deployment attestation; автоматические миграции по умолчанию выключены. Перед rollout выполните отдельно одобренные `npm run db:migrate` и `npm run bootstrap` по [RAILWAY_ACTIVATION](docs/RAILWAY_ACTIVATION.md). Автоматические миграции сохраняются только для embedded Local Preview. Любой `DATABASE_URL`, включая local mode, требует подтверждения принадлежности Studio. Для PostgreSQL в Docker есть `compose.yaml`: задайте собственный `POSTGRES_PASSWORD`, порт 5433 открыт только на loopback.
 
 RBAC: admin/tester/reviewer/viewer. Пароли scrypt, session tokens хранятся только как SHA-256; cookie HttpOnly/SameSite Strict/secure в production. Membership/workspace проверяются на каждом запросе. Нет self-registration. Первый администратор создаётся через env bootstrap.
 

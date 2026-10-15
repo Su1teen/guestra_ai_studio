@@ -152,7 +152,13 @@ export function MediaView({
         <FileText size={22} />
         <div>
           <b>{asset.fileName}</b>
-          <small>Binary media недоступны в CRM metadata</small>
+          <small>
+            {asset.processingStatus === "processing"
+              ? "Файл обрабатывается"
+              : asset.processingStatus === "failed"
+                ? "Не удалось подготовить файл"
+                : "Файл пока недоступен"}
+          </small>
         </div>
       </div>
     );

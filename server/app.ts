@@ -1,6 +1,6 @@
 import express from "express";
 import { resolve } from "node:path";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";
 import type { Database } from "./db.js";
 import type { Config } from "./config.js";
@@ -13,7 +13,7 @@ import {
 } from "./auth.js";
 import { ApiError, requireValue } from "./errors.js";
 import { Repository, record, now } from "./repository.js";
-import { Integrations, UnavailableScenarioSetup } from "./integrations.js";
+import { Integrations } from "./integrations.js";
 import { MediaService } from "./media.js";
 import { Gateway } from "./gateway.js";
 import {
@@ -38,7 +38,15 @@ import type {
   Call,
   Mode,
 } from "../shared/domain.js";
-export function createApp(db: Database, cfg: Config) {
+import { registerOrchestration } from "./orchestration.js";
+import { ScenarioFixtures } from "./scenario-setup.js";
+import { databaseReadiness } from "./readiness.js";
+import { PromptDeployments } from "./prompt-deployments.js";
+export function createApp(
+  db: Database,
+  cfg: Config,
+  options: { publisher?: import("./integrations.js").PromptPublisher } = {},
+) {
   const app = express();
   app.disable("x-powered-by");
   const integrations = new Integrations(cfg);
@@ -61,131 +69,18 @@ export function createApp(db: Database, cfg: Config) {
     res.json({ status: "ok", service: "guestra-ai-studio" }),
   );
   app.get("/api/ready", async (_req, res) => {
-    try {
-      await db.query("SELECT 1");
-      res.json({ status: "ready", database: db.kind });
-    } catch {
-      res.status(503).json({ status: "unavailable" });
-    }
+    const result = await databaseReadiness(db, cfg);
+    res.status(result.ready ? 200 : 503).json({
+      status: result.ready ? "ready" : result.status,
+      database: db.kind,
+    });
   });
   app.get("/api/auth/options", (_req, res) =>
     res.json({ localPreview: cfg.local }),
   );
-  // Signed, short-lived callback. Store a unique event receipt to handle replay safely.
-  app.post(
-    "/api/integrations/n8n/events",
-    express.raw({ type: "application/json", limit: "128kb" }),
-    async (req, res) => {
-      if (!cfg.sandbox || cfg.callbackSecret.length < 32)
-        throw new ApiError(503, "NOT_CONFIGURED", "Callback не настроен");
-      const timestamp = String(req.headers["x-studio-timestamp"] ?? "");
-      const expected = createHmac("sha256", cfg.callbackSecret)
-        .update(timestamp + ".")
-        .update(req.body)
-        .digest();
-      const supplied = Buffer.from(
-        String(req.headers["x-studio-signature"] ?? ""),
-        "hex",
-      );
-      if (
-        Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 ||
-        !Number.isFinite(Number(timestamp)) ||
-        expected.length !== supplied.length ||
-        !timingSafeEqual(expected, supplied)
-      )
-        throw new ApiError(
-          401,
-          "INVALID_SIGNATURE",
-          "Неверная подпись callback",
-        );
-      let raw: unknown;
-      try {
-        raw = JSON.parse(req.body.toString());
-      } catch {
-        throw new ApiError(400, "INVALID_JSON", "Неверный JSON");
-      }
-      const event = z
-        .object({
-          eventId: z.string().uuid(),
-          workspaceId: z.string(),
-          runId: z.string(),
-          correlationId: z.string().uuid(),
-          crmConversationId: z.string().min(1).optional(),
-          state: z.enum([
-            "inbound_saved",
-            "completed",
-            "human_owned",
-            "failed",
-          ]),
-          errorCode: z.string().max(80).optional(),
-        })
-        .strict()
-        .refine(
-          (e) => e.state === "failed" || Boolean(e.crmConversationId),
-          "CRM conversation required",
-        )
-        .parse(raw);
-      const repo = new Repository(db, event.workspaceId);
-      const run = requireValue(await repo.get<Run>("agent_runs", event.runId));
-      if (run.correlationId !== event.correlationId)
-        throw new ApiError(409, "CORRELATION_CONFLICT", "Correlation mismatch");
-      const conv = requireValue(
-        await repo.get<Conversation>("conversation_refs", run.conversationId),
-      );
-      if (conv.mode !== "sandbox")
-        throw new ApiError(
-          409,
-          "MODE_CONFLICT",
-          "Callback относится к другой среде",
-        );
-      await db.transaction(async (tx) => {
-        const r = new Repository(tx, event.workspaceId);
-        await tx.query(
-          "SELECT id FROM agent_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
-          [event.workspaceId, run.id],
-        );
-        if (await r.get("integration_configuration", "event:" + event.eventId))
-          return;
-        const fresh = requireValue(await r.get<Run>("agent_runs", run.id));
-        const ranks: Record<string, number> = {
-          inbound_saved: 1,
-          failed: 2,
-          completed: 3,
-          human_owned: 3,
-        };
-        await r.put("integration_configuration", {
-          ...record({ state: event.state, runId: run.id }),
-          id: "event:" + event.eventId,
-        });
-        if ((ranks[fresh.status] ?? 0) >= (ranks[event.state] ?? 0)) return;
-        await r.patch("conversation_refs", conv.id, {
-          ...(event.crmConversationId
-            ? { crmConversationId: event.crmConversationId }
-            : {}),
-          ...(event.state === "human_owned" ? { handoff: true } : {}),
-        });
-        await r.patch("agent_runs", run.id, {
-          status: event.state,
-          ...(event.errorCode ? { error: event.errorCode } : {}),
-        });
-        if (event.state === "failed") {
-          for (const a of (await r.list<Attempt>("message_attempts")).filter(
-            (a) => a.runId === run.id,
-          ))
-            await r.patch("message_attempts", a.id, {
-              status: "failed",
-              error: event.errorCode ?? "Workflow failed",
-            });
-        }
-      });
-      // A callback cannot itself mark a guest message delivered. Read authoritative transcript.
-      const freshConv = requireValue(
-        await repo.get<Conversation>("conversation_refs", conv.id),
-      );
-      await gateway.reconcile(repo, freshConv);
-      res.json({ accepted: true });
-    },
-  );
+  const claims = registerOrchestration(app, db, cfg, gateway, media);
+  const fixtures = new ScenarioFixtures(db, integrations);
+  const promptDeployments = new PromptDeployments(db, cfg, options.publisher);
   app.use(express.json({ limit: "128kb" }));
   app.use("/api", (req, _res, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
@@ -379,9 +274,19 @@ export function createApp(db: Database, cfg: Config) {
       database: db.kind,
     });
   });
-  app.get("/api/integrations", async (req, res) =>
+  app.get("/api/integrations", async (req, res) => {
+    const caps = await integrations.capabilities(),
+      database = await databaseReadiness(db, cfg);
     res.json({
-      ...(await integrations.capabilities()),
+      ...caps,
+      database,
+      crmReady: caps.crmReady && database.ready,
+      sandboxReady:
+        caps.sandboxReady &&
+        database.ready &&
+        Boolean(
+          cfg.orchestratorWorkspaces?.includes(req.principal.workspaceId),
+        ),
       mappings: await repo(req).list("integration_mappings"),
       mode: (
         await db.query<{ mode: Mode }>(
@@ -390,15 +295,33 @@ export function createApp(db: Database, cfg: Config) {
         )
       )[0].mode,
       promptSync: "NOT_CONNECTED",
-      traceApi: "SETUP_UNAVAILABLE",
+      traceApi: integrations.v2
+        ? "CRM_V2_CONFIGURED_NOT_VERIFIED"
+        : "LEGACY_V1",
       telephony: "VIRTUAL_ONLY",
-    }),
-  );
+    });
+  });
   app.put("/api/integrations/mode", roles("admin"), async (req, res) => {
     const { mode } = z
       .object({ mode: z.enum(["preview", "crm", "sandbox"]) })
       .parse(req.body);
     const caps = await integrations.capabilities();
+    const database = await databaseReadiness(db, cfg);
+    if (mode !== "preview" && !database.ready)
+      throw new ApiError(
+        409,
+        "DATABASE_NOT_ATTESTED",
+        "Studio database not attested",
+      );
+    if (
+      mode === "sandbox" &&
+      !cfg.orchestratorWorkspaces?.includes(req.principal.workspaceId)
+    )
+      throw new ApiError(
+        409,
+        "WORKSPACE_SCOPE_DENIED",
+        "N8N_WORKSPACE_IDS must include this workspace",
+      );
     if (
       (mode === "crm" && !caps.crmReady) ||
       (mode === "sandbox" && !caps.sandboxReady)
@@ -448,13 +371,30 @@ export function createApp(db: Database, cfg: Config) {
       requireValue(await r.get<Client>("virtual_clients", input.clientId));
       if (input.agentId)
         requireValue(await r.get<Agent>("agent_configurations", input.agentId));
+      const selectedAgentId =
+        input.agentId ?? (await r.list<Agent>("agent_configurations"))[0]?.id;
+      if (input.promptVersionId) {
+        const prompt = requireValue(
+          await r.get<Prompt>("prompt_versions", input.promptVersionId),
+        );
+        if (prompt.agentId !== selectedAgentId || prompt.status === "draft")
+          throw new ApiError(
+            409,
+            "IMMUTABLE_VERSION_REQUIRED",
+            "Choose a matching immutable test/published prompt",
+          );
+      }
       const workspace = (
         await tx.query<{ mode: Mode }>(
           "SELECT mode FROM workspaces WHERE id=$1",
           [r.workspaceId],
         )
       )[0];
-      const externalUserId = `studio:${r.workspaceId}:${workspace.mode}:${input.clientId}:${input.channel}`;
+      const namespace =
+        workspace.mode === "preview"
+          ? ""
+          : `${cfg.environment ?? "production"}:${cfg.crmProperty}:`;
+      const externalUserId = `studio:${r.workspaceId}:${workspace.mode}:${namespace}${input.clientId}:${input.channel}`;
       let identity = (await r.list<Identity>("virtual_identities")).find(
         (i) => i.externalUserId === externalUserId,
       );
@@ -463,7 +403,7 @@ export function createApp(db: Database, cfg: Config) {
           clientId: input.clientId,
           displayChannel: input.channel,
           transportChannel: "simulator" as const,
-          externalUserId: `studio:${r.workspaceId}:${workspace.mode}:${input.clientId}:${input.channel}`,
+          externalUserId,
         });
         await r.put("virtual_identities", identity, {
           client_id: input.clientId,
@@ -479,6 +419,7 @@ export function createApp(db: Database, cfg: Config) {
       const conv: Conversation = record({
         agentId:
           input.agentId ?? (await r.list<Agent>("agent_configurations"))[0]?.id,
+        promptVersionId: input.promptVersionId,
         clientId: input.clientId,
         identityId: identity.id,
         title: input.title,
@@ -491,6 +432,17 @@ export function createApp(db: Database, cfg: Config) {
         unread: 0,
         handoff: false,
         setupStatus: setup,
+        ...(workspace.mode !== "preview"
+          ? {
+              propertyMapping: {
+                crmPropertyId: cfg.crmProperty,
+                crmTenantId: cfg.crmTenant ?? "",
+                pmsPropertyId: cfg.pmsProperty,
+                pmsTenantId: cfg.pmsTenant ?? "",
+                environment: cfg.environment ?? "production",
+              },
+            }
+          : {}),
       });
       await r.put("conversation_refs", conv, {
         client_id: input.clientId,
@@ -565,17 +517,55 @@ export function createApp(db: Database, cfg: Config) {
         connectionError = e instanceof ApiError ? e.message : "CRM недоступна";
       }
     }
-    const messages = (
-      await r.list<Message>(
-        conv.mode === "preview" ? "preview_messages" : "transcript_snapshots",
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(100),
+        before: z.string().optional(),
+      })
+      .parse(req.query);
+    const table =
+      conv.mode === "preview" ? "preview_messages" : "transcript_snapshots";
+    const args: unknown[] = [r.workspaceId, conv.id, page.limit + 1];
+    let before = "";
+    if (page.before) {
+      const anchor = requireValue(await r.get<Message>(table, page.before));
+      if (anchor.conversationId !== conv.id)
+        throw new ApiError(
+          400,
+          "INVALID_CURSOR",
+          "Message cursor belongs to another conversation",
+        );
+      if (conv.mode === "preview") {
+        const row = (
+          await db.query<{ sequence: string }>(
+            "SELECT sequence FROM preview_messages WHERE workspace_id=$1 AND id=$2",
+            [r.workspaceId, anchor.id],
+          )
+        )[0];
+        args.push(row.sequence);
+        before = "AND sequence<$4::bigint";
+      } else {
+        args.push(anchor.createdAt, anchor.id);
+        before = "AND (data->>'createdAt',id)<($4::text,$5::text)";
+      }
+    }
+    const rows = await db.query<{ data: Message; sequence?: string }>(
+      `SELECT data${conv.mode === "preview" ? ",sequence" : ""} FROM ${table} WHERE workspace_id=$1 AND conversation_id=$2 AND COALESCE(data->>'tombstone','false')<>'true' ${before} ORDER BY ${conv.mode === "preview" ? "sequence DESC" : "data->>'createdAt' DESC,id DESC"} LIMIT $3`,
+      args,
+    );
+    const messages = rows
+      .slice(0, page.limit)
+      .reverse()
+      .map((x) => ({
+        ...x.data,
+        ...(x.sequence ? { sequence: Number(x.sequence) } : {}),
+      }));
+    const removedMessageIds = (
+      await db.query<{ id: string }>(
+        "SELECT id FROM transcript_snapshots WHERE workspace_id=$1 AND conversation_id=$2 AND data->>'tombstone'='true'",
+        [r.workspaceId, conv.id],
       )
-    )
-      .filter((x) => x.conversationId === conv.id)
-      .sort((a, b) =>
-        conv.mode === "preview"
-          ? (a.sequence ?? 0) - (b.sequence ?? 0)
-          : a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-      );
+    ).map((x) => x.id);
     for (const m of messages)
       for (const a of m.attachments) {
         try {
@@ -603,6 +593,9 @@ export function createApp(db: Database, cfg: Config) {
       connectionError,
       cached: Boolean(connectionError),
       nextCursor: messages.at(-1)?.id,
+      olderCursor: messages[0]?.id,
+      hasOlder: rows.length > page.limit,
+      removedMessageIds,
     });
   });
   app.post(
@@ -730,6 +723,12 @@ export function createApp(db: Database, cfg: Config) {
             v.id === input.targetId &&
             v.conversationId === input.conversationId,
         );
+      if (input.targetType === "message" && !valid)
+        valid = (await r.list<Attempt>("message_attempts")).some(
+          (a) =>
+            a.id === input.targetId &&
+            a.conversationId === input.conversationId,
+        );
       if (input.targetType === "run")
         valid = (await r.list<Run>("agent_runs")).some(
           (v) =>
@@ -747,6 +746,14 @@ export function createApp(db: Database, cfg: Config) {
           (v) =>
             v.id === input.targetId &&
             v.conversationId === input.conversationId,
+        );
+      if (input.targetType === "operation" || input.targetType === "deployment")
+        valid = (await r.list<Run>("agent_runs")).some(
+          (v) =>
+            v.conversationId === input.conversationId &&
+            (input.targetType === "operation"
+              ? v.businessOperationId === input.targetId
+              : v.deploymentId === input.targetId),
         );
       if (!valid)
         throw new ApiError(
@@ -803,6 +810,57 @@ export function createApp(db: Database, cfg: Config) {
         );
       });
       res.json(updated);
+    },
+  );
+  app.patch(
+    "/api/annotations/:id/reference",
+    roles("admin", "tester", "reviewer"),
+    async (req, res) => {
+      const { reference } = z
+          .object({ reference: z.string().min(1).max(200) })
+          .strict()
+          .parse(req.body),
+        r = repo(req),
+        annotation = requireValue(
+          await r.get<Annotation>("tester_annotations", String(req.params.id)),
+        );
+      const attempts = (await r.list<Attempt>("message_attempts")).filter(
+        (a) =>
+          a.conversationId === annotation.conversationId &&
+          a.id === annotation.targetId,
+      );
+      const runs = (await r.list<Run>("agent_runs")).filter(
+        (v) =>
+          v.conversationId === annotation.conversationId &&
+          v.id === annotation.targetId,
+      );
+      if (
+        !attempts.some((a) => a.crmMessageId === reference) &&
+        !runs.some((v) =>
+          [v.executionId, v.businessOperationId, v.deploymentId].includes(
+            reference,
+          ),
+        )
+      )
+        throw new ApiError(
+          409,
+          "REFERENCE_NOT_VERIFIED",
+          "Reference must come from authoritative run/message evidence",
+        );
+      if (
+        annotation.externalReference &&
+        annotation.externalReference !== reference
+      )
+        throw new ApiError(
+          409,
+          "IDENTITY_CONFLICT",
+          "Annotation reference already bound",
+        );
+      res.json(
+        await r.patch("tester_annotations", annotation.id, {
+          externalReference: reference,
+        }),
+      );
     },
   );
   app.post("/api/agents", roles("admin"), async (req, res) => {
@@ -942,7 +1000,10 @@ export function createApp(db: Database, cfg: Config) {
     );
     await db.transaction(async (tx) => {
       const t = new Repository(tx, r.workspaceId);
-      await t.patch("prompt_versions", p.id, { status: "published" });
+      await t.patch("prompt_versions", p.id, {
+        status: "published",
+        deploymentState: "STUDIO_PUBLISHED",
+      });
       await t.patch("agent_configurations", p.agentId, {
         activeVersionId: p.id,
       });
@@ -953,13 +1014,68 @@ export function createApp(db: Database, cfg: Config) {
         "Активна в Studio registry; n8n sync не подключён",
       );
     });
-    res.json({ activeVersionId: p.id, sync: "NOT_CONNECTED" });
+    res.json({
+      activeVersionId: p.id,
+      sync: "NOT_CONNECTED",
+      deploymentState: "STUDIO_PUBLISHED",
+    });
   });
   app.post("/api/scenarios", roles("admin", "tester"), async (req, res) => {
     const value = record(scenarioSchema.parse(req.body));
     await repo(req).put("test_scenarios", value);
     res.status(201).json(value);
   });
+  app.post("/api/prompts/:id/deploy", roles("admin"), async (req, res) =>
+    res.json(
+      await promptDeployments.deploy(
+        req.principal.workspaceId,
+        String(req.params.id),
+      ),
+    ),
+  );
+  app.post(
+    "/api/prompts/:id/rollback-deployment",
+    roles("admin"),
+    async (req, res) =>
+      res.json(
+        await promptDeployments.rollback(
+          req.principal.workspaceId,
+          String(req.params.id),
+        ),
+      ),
+  );
+  app.post(
+    "/api/prompts/:id/test-version",
+    roles("admin"),
+    async (req, res) => {
+      const r = repo(req),
+        p = requireValue(
+          await r.get<Prompt>("prompt_versions", String(req.params.id)),
+        );
+      if (p.status !== "draft")
+        throw new ApiError(
+          409,
+          "IMMUTABLE_VERSION",
+          "Test version must be a draft",
+        );
+      const testVersion = await r.patch(
+        "prompt_versions",
+        p.id,
+        {
+          deploymentState: "TEST_VERSION",
+          status: "test",
+        },
+        ["draft"],
+      );
+      if (!testVersion)
+        throw new ApiError(
+          409,
+          "IMMUTABLE_VERSION",
+          "Version already frozen/published",
+        );
+      res.json(testVersion);
+    },
+  );
   app.post(
     "/api/scenarios/:id/run",
     roles("admin", "tester"),
@@ -985,17 +1101,13 @@ export function createApp(db: Database, cfg: Config) {
           ? {
               status: "PREVIEW_ONLY" as const,
               references: {},
-              reason:
-                "Локальная симуляция. Бронь, платёж и проживание в CRM/PMS не создавались.",
+              reason: "Local Preview; business state не создавался",
             }
-          : scenario.stage === "new_contact"
-            ? {
-                status: "READY" as const,
-                references: {},
-                reason:
-                  "Новое обращение создаётся через единственного inbound owner",
-              }
-            : await new UnavailableScenarioSetup().prepare();
+          : {
+              status: "SETUP_UNAVAILABLE" as const,
+              references: {},
+              reason: "Ожидаем проверенный CRM/PMS fixture setup",
+            };
       const run = record({
         scenarioId: scenario.id,
         conversationId: conv.id,
@@ -1010,11 +1122,44 @@ export function createApp(db: Database, cfg: Config) {
         scenario_id: scenario.id,
         conversation_id: conv.id,
       });
-      res
-        .status(201)
-        .json({ conversation: conv, run, opening: scenario.opening });
+      if (conv.mode === "sandbox") {
+        try {
+          await fixtures.prepare(r.workspaceId, run.id);
+        } catch (e) {
+          await r.patch("scenario_runs", run.id, {
+            status: "SETUP_UNAVAILABLE",
+            reason: e instanceof ApiError ? e.message : "Setup недоступен",
+          });
+        }
+      }
+      res.status(201).json({
+        conversation: await r.get<Conversation>("conversation_refs", conv.id),
+        run: await r.get<ScenarioRun>("scenario_runs", run.id),
+        opening: scenario.opening,
+      });
     },
   );
+  for (const action of ["setup", "retire", "simulate-payment"] as const)
+    app.post(
+      "/api/scenario-runs/:id/" + action,
+      roles("admin", "tester"),
+      async (req, res) => {
+        const r = repo(req);
+        requireValue(
+          await r.get<ScenarioRun>("scenario_runs", String(req.params.id)),
+        );
+        res.json(
+          action === "setup"
+            ? await fixtures.prepare(r.workspaceId, String(req.params.id))
+            : action === "retire"
+              ? await fixtures.retire(r.workspaceId, String(req.params.id))
+              : await fixtures.simulatePayment(
+                  r.workspaceId,
+                  String(req.params.id),
+                ),
+        );
+      },
+    );
   app.post(
     "/api/scenario-runs/:id/evaluate",
     roles("admin", "tester", "reviewer"),
@@ -1233,5 +1378,13 @@ export function createApp(db: Database, cfg: Config) {
       });
     },
   );
-  return { app, gateway, integrations, media };
+  return {
+    app,
+    gateway,
+    integrations,
+    media,
+    claims,
+    fixtures,
+    promptDeployments,
+  };
 }

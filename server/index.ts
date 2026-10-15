@@ -2,11 +2,20 @@ import { config } from "./config.js";
 import { database, migrate } from "./db.js";
 import { seed } from "./seed.js";
 import { createApp } from "./app.js";
+import { assertDatabaseOwnership, databaseReadiness } from "./readiness.js";
 const cfg = await config();
 if (!cfg.databaseUrl && !cfg.local)
   throw new Error("DATABASE_URL required unless LOCAL_PREVIEW=true");
 const db = await database(cfg.databaseUrl, cfg.dataDir);
-await migrate(db);
+if (cfg.databaseUrl || !cfg.local)
+  await assertDatabaseOwnership(db, cfg.databaseOwner);
+if (cfg.autoMigrate) await migrate(db);
+const ready = await databaseReadiness(db, cfg);
+if (!ready.ready)
+  throw new Error(
+    ready.status +
+      ": apply reviewed Studio migrations and attestation explicitly",
+  );
 await seed(db, cfg.local);
 const { app, gateway } = createApp(db, cfg);
 const server = app.listen(cfg.port, cfg.host, () =>

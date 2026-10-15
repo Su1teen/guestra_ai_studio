@@ -1,3 +1,4 @@
+import { testDatabase } from "./test-database";
 import {
   beforeAll,
   afterAll,
@@ -33,6 +34,11 @@ const cfg: Config = {
   mediaDir: resolve(".local/test-media"),
   signingSecret: "test-signing-secret-only-32-characters",
   sandbox: true,
+  environment: "test",
+  crmVersion: "v1",
+  crmTenant: "crm-tenant",
+  pmsTenant: "pms-tenant",
+  orchestratorWorkspaces: ["les-sandbox"],
   allowedHosts: ["sandbox.invalid"],
   crmUrl: "https://sandbox.invalid/crm",
   crmKey: "test-key",
@@ -40,7 +46,7 @@ const cfg: Config = {
   pmsKey: "test-key",
   n8nUrl: "https://sandbox.invalid/n8n",
   n8nCapabilitiesUrl: "https://sandbox.invalid/capabilities",
-  n8nToken: "test-token",
+  n8nToken: "test-orchestrator-token-32-characters",
   callbackSecret: "test-callback-secret-only-32-characters",
   crmProperty: "test-property",
   pmsProperty: "00000000-0000-4000-a000-000000000001",
@@ -90,7 +96,7 @@ function callback(run: Run, conv: Conversation, state: string) {
     .send(body);
 }
 beforeAll(async () => {
-  db = await database(process.env.TEST_DATABASE_URL, "memory://");
+  db = await testDatabase();
   await migrate(db);
   await seed(db, true);
   platform = createApp(db, cfg);
@@ -105,7 +111,7 @@ beforeEach(async () => {
     "UPDATE message_attempts SET status='failed',data=data || '{\"status\":\"failed\"}'::jsonb WHERE status IN ('queued','processing','awaiting_crm')",
   );
   await db.query(
-    "UPDATE agent_runs SET data=data || '{\"status\":\"failed\"}'::jsonb WHERE data->>'status' IN ('queued','processing','awaiting_crm','completion_unknown')",
+    "UPDATE agent_runs SET data=data || '{\"status\":\"failed\"}'::jsonb WHERE data->>'status' NOT IN ('completed','preview_completed','human_owned','failed','inbound_saved_no_orchestrator')",
   );
   await db.query(
     "UPDATE memberships SET role='admin' WHERE user_id='local-tester'",
@@ -191,6 +197,7 @@ describe("authentication and isolation", () => {
       sandboxReady: false,
       sandboxAttested: false,
       mappingReady: false,
+      mediaScanner: "MEDIA_SCANNER_NOT_CONFIGURED",
     });
     await agent
       .put("/api/integrations/mode")
@@ -583,7 +590,13 @@ describe("connected adapter and async completion", () => {
     await send(c, "Второй").expect(202);
     const dispatch = vi
       .spyOn(platform.integrations, "dispatch")
-      .mockResolvedValue({ accepted: true });
+      .mockImplementation(async (_w, _c, _i, a) => {
+        const run = (await repo.get<Run>("agent_runs", a.runId))!;
+        return platform.claims.claim(
+          run.dispatchEnvelope!,
+          "test-execution-" + run.id,
+        );
+      });
     await platform.gateway.tick();
     await platform.gateway.tick();
     expect(dispatch).toHaveBeenCalledTimes(1);
@@ -612,7 +625,10 @@ describe("connected adapter and async completion", () => {
         (r) => r.conversationId === c.id && r.id !== run.id,
       )!;
       await callback(next, c, "completed").expect(200);
-      return { accepted: true };
+      return platform.claims.claim(
+        next.dispatchEnvelope!,
+        "test-execution-" + next.id,
+      );
     });
     await platform.gateway.tick();
     expect(dispatch).toHaveBeenCalledTimes(2);
@@ -639,7 +655,13 @@ describe("connected adapter and async completion", () => {
     await agent.post("/api/runs/" + run.id + "/retry").expect(200);
     const dispatch = vi
       .spyOn(platform.integrations, "dispatch")
-      .mockResolvedValue({ accepted: true });
+      .mockImplementation(async (_w, _c, _i, a) => {
+        const run = (await repo.get<Run>("agent_runs", a.runId))!;
+        return platform.claims.claim(
+          run.dispatchEnvelope!,
+          "test-execution-" + run.id,
+        );
+      });
     await platform.gateway.tick();
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch.mock.calls[0][3].externalMessageId).toBe(
