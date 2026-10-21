@@ -2,6 +2,19 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
+export async function loadMigrationPolicy() {
+  const policy=JSON.parse(await readFile(new URL('./migration-policy.json',import.meta.url),'utf8'));
+  const categories=new Map();
+  for(const category of ['safe','integration','manual']) {
+    if(!Array.isArray(policy[category]))throw new Error('INVALID_MIGRATION_POLICY');
+    for(const name of policy[category]) {
+      if(typeof name!=='string'||categories.has(name))throw new Error('INVALID_MIGRATION_POLICY');
+      categories.set(name,category);
+    }
+  }
+  // New files require an explicit reviewed classification in the same release.
+  return name=>categories.get(name)??'manual';
+}
 export function identityFromEnv(system, env = process.env) {
   const environment = env.INTEGRATION_ENVIRONMENT ?? env.STUDIO_ENVIRONMENT ?? 'production';
   const owner = env.GUESTRA_DATABASE_OWNER ?? env.STUDIO_DATABASE_OWNER;
@@ -13,7 +26,7 @@ export function identityFromEnv(system, env = process.env) {
 
 /** One dedicated connection, a session lock, and one transaction per migration. */
 export async function deploy(query, { identity, migrations, foreignTables, requiredTables,
-  baselineApproved = false, integrationApproved = false, afterMigrations = async () => {} }) {
+  baselineApproved = false, integrationApproved = false, attestationTable, afterMigrations = async () => {} }) {
   const lock = 'guestra:deployment:' + identity.system;
   await query("SET lock_timeout='60s'");
   await query("SET statement_timeout='5min'");
@@ -25,6 +38,17 @@ export async function deploy(query, { identity, migrations, foreignTables, requi
     const names = new Set(tables.map(t => t.table_name));
     if (foreignTables.some(t => names.has(t)) || requiredTables.some(t => !names.has(t)))
       throw new Error('DATABASE_OWNERSHIP_MISMATCH');
+    if (attestationTable) {
+      if (!['guestra_integration_deployment','studio_database_attestation'].includes(attestationTable)) throw new Error('INVALID_ATTESTATION_TABLE');
+      if (names.has(attestationTable)) {
+        const [previous] = await query(`SELECT environment,deployment_id FROM ${attestationTable} WHERE id=true`);
+        if (previous && (previous.environment !== identity.environment || previous.deployment_id !== identity.deployment)) {
+          // Stable IDs are safe operator metadata. Never create a new canonical marker on a conflicting database.
+          console.error(JSON.stringify({code:'DATABASE_IDENTITY_CONFLICT',existingEnvironment:previous.environment,existingDeploymentId:previous.deployment_id}));
+          throw new Error('DATABASE_IDENTITY_CONFLICT');
+        }
+      }
+    }
     if (names.has('guestra_deployment_identity')) {
       const rows = await query('SELECT system,environment,deployment_id FROM guestra_deployment_identity');
       if (rows.length !== 1 || rows[0].system !== identity.system || rows[0].environment !== identity.environment

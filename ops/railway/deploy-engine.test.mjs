@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { deploy, identityFromEnv } from './deploy-engine.mjs';
+import { deploy, identityFromEnv, loadMigrationPolicy } from './deploy-engine.mjs';
 const url = process.env.DEPLOY_TEST_DATABASE_URL;
 const identity = {system:'guestra_test',environment:'test',deployment:'isolated-deployment-v1'};
 async function connect(connectionString) {
@@ -24,6 +24,10 @@ test('ownership requires explicit stable identity and a recognized environment',
   assert.throws(()=>identityFromEnv('guestra_pms',{}),/IDENTITY/);
   assert.throws(()=>identityFromEnv('guestra_pms',{GUESTRA_DATABASE_OWNER:'guestra_crm',GUESTRA_DATABASE_DEPLOYMENT_ID:'permanent-v1'}),/IDENTITY/);
   assert.deepEqual(identityFromEnv('guestra_pms',{GUESTRA_DATABASE_OWNER:'guestra_pms',GUESTRA_DATABASE_DEPLOYMENT_ID:'permanent-v1'}),{system:'guestra_pms',environment:'production',deployment:'permanent-v1'});
+});
+test('unclassified future SQL always requires manual release review',async()=>{
+  const category=await loadMigrationPolicy();
+  assert.equal(category('core/9999_unreviewed.sql'),'manual');
 });
 test('populated PostgreSQL: opt-in triggers, concurrent deploy, drift, rollback and ownership', {skip:!url}, async () => {
   const target = new URL(url);
@@ -55,6 +59,11 @@ test('populated PostgreSQL: opt-in triggers, concurrent deploy, drift, rollback 
     await assert.rejects(deploy(db.query,{...options,migrations:[...options.migrations,{name:'0003.sql',file:c,category:'safe'}]}));
     assert.equal((await db.query("SELECT to_regclass('public.rollback_probe') AS name"))[0].name,null);
     await assert.rejects(deploy(db.query,{...options,identity:{...identity,deployment:'different-deployment-v2'}}),/IDENTITY_CONFLICT/);
+    await db.query("CREATE TABLE guestra_integration_deployment(id boolean PRIMARY KEY,environment text,deployment_id text); INSERT INTO guestra_integration_deployment VALUES(true,'test','previous-stable-database-v1')");
+    await assert.rejects(deploy(db.query,{...options,attestationTable:'guestra_integration_deployment'}),/IDENTITY_CONFLICT/);
+    await db.query('DROP TABLE guestra_deployment_identity');
+    await assert.rejects(deploy(db.query,{...options,attestationTable:'guestra_integration_deployment'}),/IDENTITY_CONFLICT/);
+    assert.equal((await db.query("SELECT to_regclass('public.guestra_deployment_identity') AS name"))[0].name,null);
     await db.query('CREATE TABLE foreign_business(id integer)');
     await assert.rejects(deploy(db.query,options),/OWNERSHIP_MISMATCH/);
   } finally {

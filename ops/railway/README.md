@@ -49,20 +49,26 @@ journal without historical checksums. This attests the reviewed deployed source;
 it cannot prove old file contents retrospectively. After successful first
 adoption, set this approval back to false. The identity never changes per push.
 Existing integration attestations must match; a conflict is refused rather than
-overwritten. Inspect the existing protected capabilities/deployment metadata if
-an identity is already present.
+overwritten. Existing safe deployment IDs are printed as operator metadata on
+conflict, before any new canonical identity is created. Keep that existing ID;
+do not change an established database identity after each deployment.
 
 The pre-deploy uses a dedicated PostgreSQL connection and an advisory lock.
 It checks service ownership and immutable environment/deployment identity,
 checks every source checksum before executing pending SQL, records each committed
 file, and rolls back a failed file. Missing or changed deployed files fail closed.
 Each migration is transactional. Concurrent pre-deploys converge on one journal.
-Ordinary approved additive files run once on future pushes, without manual SQL.
+`migration-policy.json` explicitly classifies reviewed files. Unclassified new SQL
+is manual by default; adding an approved additive migration includes its policy
+entry in the reviewed release. Ordinary approved additive files run once on future
+pushes, without manual SQL or an operator changing migration IDs.
 The legacy PMS runner initializes `push-schema` only on an empty database; it
 never replays the 0001–0021 baseline against populated databases. Migration 0042
 repairs missing `connect_credentials` and `scopes` without replaying historical SQL.
-Unexpected missing historical CRM files and PMS 0026/0028 data backfills require
-separate review. Destructive migrations are never automatically approved.
+Unexpected missing historical CRM files and PMS 0022–0041 files require separate
+review, including historical data backfills. They are adopted from their existing
+journal rather than replayed blindly. Destructive migrations are never
+automatically approved.
 
 ## Optional integration schema and registry activation
 
