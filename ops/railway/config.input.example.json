@@ -1,0 +1,18 @@
+{
+  "environment": "production",
+  "propertyMappingConfirmed": false,
+  "mapping": {
+    "crmPropertyId": "LOOKUP_REQUIRED",
+    "crmTenantId": "LOOKUP_REQUIRED",
+    "pmsPropertyId": "LOOKUP_REQUIRED",
+    "pmsTenantId": "LOOKUP_REQUIRED"
+  },
+  "urls": {"crm":"https://crm.example.invalid","pms":"https://pms.example.invalid","studio":"https://studio.example.invalid"},
+  "postgresServices": {"crm":"Postgres","pms":"haip-postgres","studio":"postgres-wz2f"},
+  "databaseDeploymentIds": {"crm":"SET_ONCE_AFTER_LOOKUP","pms":"SET_ONCE_AFTER_LOOKUP","studio":"KEEP_EXISTING_ID"},
+  "existing": {
+    "crm": {"DATABASE_URL":"KEEP_EXISTING","CRM_INTEGRATION_PRINCIPALS":"[]"},
+    "pms": {"DATABASE_URL":"KEEP_EXISTING","REDIS_URL":"KEEP_EXISTING","AUTH_ENABLED":"KEEP_EXISTING"},
+    "studio": {"DATABASE_URL":"KEEP_EXISTING","N8N_WORKSPACE_IDS":"LOOKUP_REQUIRED_EXISTING_WORKSPACE"}
+  }
+}

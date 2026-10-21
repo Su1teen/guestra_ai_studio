@@ -166,6 +166,18 @@ export function createApp(
     res.send(await media.storage.get(asset.storageKey));
   });
   app.use("/api", authenticate(db));
+  app.get("/api/integrations/readiness", roles("admin"), async (_req, res) => {
+    const dbReady = await databaseReadiness(db, cfg);
+    const statuses: string[] = [dbReady.ready ? "DATABASE_READY" : dbReady.status];
+    if (dbReady.ready) statuses.push("STUDIO_READY");
+    const discovery = await integrations.capabilities();
+    for (const connection of discovery.connections) {
+      if (connection.name === "n8n" && connection.status === "NOT_CONFIGURED") statuses.push("N8N_NOT_CONFIGURED");
+      else if (connection.status === "CONNECTED") statuses.push(connection.name === "crm" ? "CRM_V2_READY" : connection.name === "pms" ? "PMS_V2_READY" : "N8N_READY");
+      else statuses.push(connection.name.toUpperCase() + ":" + connection.status);
+    }
+    res.json({statuses, ready: dbReady.ready && discovery.mappingReady});
+  });
   app.post("/api/auth/logout", async (req, res) => {
     const token = req.headers.cookie
       ?.split(";")

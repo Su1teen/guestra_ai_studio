@@ -44,6 +44,8 @@ export async function config(): Promise<Config> {
   const local =
     process.env.LOCAL_PREVIEW === "true" &&
     process.env.NODE_ENV !== "production";
+  if (process.env.NODE_ENV === "production" && process.env.STUDIO_AUTO_MIGRATE === "true")
+    throw new Error("Use the controlled Railway pre-deploy pipeline for production migrations; STUDIO_AUTO_MIGRATE must be false");
   const host = process.env.HOST ?? (local ? "127.0.0.1" : "0.0.0.0");
   if (local && !["127.0.0.1", "localhost", "::1"].includes(host))
     throw new Error("Local preview must bind to loopback");
