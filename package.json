@@ -7,6 +7,9 @@
     "node": ">=20.19"
   },
   "scripts": {
+    "integrations:generate-config": "node ops/railway/generate-config.mjs",
+    "integrations:predeploy": "node ops/railway/predeploy.mjs",
+    "test:deployment": "node --test ops/railway/deploy-engine.test.mjs ops/railway/generate-config.test.mjs",
     "dev": "tsx scripts/dev.ts",
     "dev:api": "tsx watch server/index.ts",
     "dev:web": "vite --host 127.0.0.1",

@@ -41,7 +41,7 @@ export async function databaseReadiness(db: Database, cfg: Config) {
       f.endsWith(".sql"),
     );
     if (required.some((f) => !applied.some((x) => x.version === f)))
-      return { status: "MIGRATIONS_REQUIRED", ready: false };
+      return { status: "MIGRATION_REQUIRED", ready: false };
     await db.query(
       "SELECT r.id FROM agent_runs r JOIN message_attempts a ON a.workspace_id=r.workspace_id AND a.data->>'runId'=r.id JOIN conversation_refs c ON c.workspace_id=r.workspace_id AND c.id=r.conversation_id LIMIT 0",
     );
@@ -66,7 +66,11 @@ export async function databaseReadiness(db: Database, cfg: Config) {
         return { status: "DATABASE_NOT_ATTESTED", ready: false };
     }
     return { status: "READY", ready: true };
-  } catch {
+  } catch (error) {
+    const code = (error as {code?: string}).code;
+    if (code === "42P01" || code === "42703") return {status:"MIGRATION_REQUIRED",ready:false};
+    if (error instanceof ApiError) return {status:error.code,ready:false};
+    if (code?.startsWith("08") || code === "ECONNREFUSED" || code === "ENOTFOUND") return {status:"DATABASE_UNAVAILABLE",ready:false};
     return { status: "DATABASE_NOT_ATTESTED", ready: false };
   }
 }

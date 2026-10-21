@@ -1,0 +1,5 @@
+{
+  "safe": ["core/001_foundation.sql", "core/002_preview_ordering.sql", "core/003_integration_readiness.sql"],
+  "integration": [],
+  "manual": []
+}

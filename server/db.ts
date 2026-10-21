@@ -2,6 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { readFile, readdir, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 export interface Sql {
   query<T = Record<string, unknown>>(
     sql: string,
@@ -67,35 +68,35 @@ export async function database(
   };
 }
 export async function migrate(db: Database) {
-  await db.query(
+  await db.transaction(async tx => {
+  if (db.kind === "PostgreSQL") await tx.query("SELECT pg_advisory_xact_lock(hashtext('guestra:studio:migrations'))");
+  await tx.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
   );
+  await tx.query("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum varchar(64)");
   for (const file of (await readdir(resolve("migrations")))
     .filter((x) => x.endsWith(".sql"))
     .sort()) {
-    if (
-      (
-        await db.query(
-          "SELECT version FROM schema_migrations WHERE version=$1",
-          [file],
-        )
-      ).length
-    )
-      continue;
     let sql = await readFile(resolve("migrations", file), "utf8");
+    const checksum = createHash("sha256").update(sql).digest("hex");
+    const [existing] = await tx.query<{checksum:string|null}>("SELECT checksum FROM schema_migrations WHERE version=$1",[file]);
+    if (existing) {
+      if (existing.checksum && existing.checksum !== checksum) throw new Error("MIGRATION_CHECKSUM_DRIFT:" + file);
+      if (!existing.checksum) await tx.query("UPDATE schema_migrations SET checksum=$1 WHERE version=$2",[checksum,file]);
+      continue;
+    }
     sql = sql.replace(
       "CREATE TABLE schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());",
       "",
     );
-    await db.transaction(async (tx) => {
       for (const statement of sql
         .split(";")
         .map((s) => s.trim())
         .filter(Boolean))
         await tx.query(statement);
-      await tx.query("INSERT INTO schema_migrations(version) VALUES($1)", [
-        file,
+      await tx.query("INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)", [
+        file, checksum,
       ]);
-    });
   }
+  });
 }

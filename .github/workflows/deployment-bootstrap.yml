@@ -1,0 +1,34 @@
+name: Deployment bootstrap and Docker
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  deployment:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: guestra_test
+          POSTGRES_PASSWORD: test_only_password
+          POSTGRES_DB: guestra_deployment_integration_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:deployment
+        env:
+          DEPLOY_TEST_DATABASE_URL: postgresql://guestra_test:test_only_password@localhost:5432/guestra_deployment_integration_test
+      - run: docker build -t guestra-studio-bootstrap-test .
+      - run: docker run --rm guestra-studio-bootstrap-test node ops/railway/predeploy.mjs
