@@ -94,7 +94,9 @@ export function generate(input) {
     CRM_PROPERTY_ID: mapping.crmPropertyId, PMS_PROPERTY_ID: mapping.pmsPropertyId, ENVIRONMENT: environment };
   return { crm, pms, studio, later };
 }
-export const envText = values => Object.entries(values).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('\n') + '\n';
+// JSON-valued variables use literal single quotes: dotenv parsers otherwise
+// retain the backslashes in JSON.stringify's escaped double quotes.
+export const envText = values => Object.entries(values).map(([key, value]) => `${key}=${value.includes('"')&&!value.includes("'")?"'"+value+"'":JSON.stringify(value)}`).join('\n') + '\n';
 export async function writeConfig(input, directory) {
   const result = generate(input);
   await mkdir(directory, { mode: 0o700 }); // Refuse overwrite: restarting this command must not silently rotate secrets.

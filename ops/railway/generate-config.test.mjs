@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate, envText } from './generate-config.mjs';
+import { parseEnv } from 'node:util';
 const input=()=>({environment:'production',propertyMappingConfirmed:true,
   mapping:{crmPropertyId:'crm-real-property',crmTenantId:'crm-real-tenant',pmsPropertyId:'a0000001-0000-4000-a000-000000000001',pmsTenantId:'pms-real-tenant'},
   urls:{crm:'https://crm.test.invalid',pms:'https://pms.test.invalid',studio:'https://studio.test.invalid'},
@@ -18,7 +19,7 @@ test('generated contracts agree and preserve all existing database, staff and le
   assert.notEqual(credentials[0].key,credentials[1].key);
   assert.equal(out.pms.GUESTRA_INTEGRATION_MIGRATIONS_APPROVED,'false');assert.equal(out.crm.GUESTRA_BUSINESS_WRITES_ENABLED,'false');
   assert.equal(out.crm.CRM_PMS_INTEGRATION_ENABLED,'false');assert.equal(out.pms.GUESTRA_INTEGRATION_V2_ENABLED,'false');
-  assert.ok(envText(out.pms).includes('CONNECT_CREDENTIALS_BOOTSTRAP="['));
+  for(const name of ['pms','crm','studio','later'])assert.deepEqual({...parseEnv(envText(out[name]))},out[name]);
 });
 test('refuses fake identities, unconfirmed mapping and conflicting signing policy',()=>{
   const c=input();c.mapping.pmsTenantId='LOOKUP_REQUIRED';assert.throws(()=>generate(c));
