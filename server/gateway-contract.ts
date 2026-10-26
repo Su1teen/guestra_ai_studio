@@ -21,7 +21,7 @@ export const envelopeSchema = z
     contractVersion: z.literal("studio-gateway-v1"),
     workspaceId: z.string().min(1),
     conversationId: z.string().min(1),
-    environment: z.enum(["test", "sandbox"]),
+    environment: z.enum(["test", "sandbox", "production"]),
     runId: z.string().uuid(),
     correlationId: z.string().uuid(),
     inboundOwner: z.literal("n8n"),

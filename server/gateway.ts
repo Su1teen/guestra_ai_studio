@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Database } from "./db.js";
+import { orchestrationAllowed } from "./config.js";
 import { Repository, record, now } from "./repository.js";
 import type {
   Conversation,
@@ -45,10 +46,7 @@ export class Gateway {
       );
       if (
         conv.mode !== "preview" &&
-        (!this.integrations.cfg.sandbox ||
-          !["test", "sandbox"].includes(
-            this.integrations.cfg.environment ?? "production",
-          ))
+        !orchestrationAllowed(this.integrations.cfg)
       )
         throw new ApiError(
           403,

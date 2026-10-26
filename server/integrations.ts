@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Config } from "./config.js";
+import { orchestrationAllowed, type Config } from "./config.js";
 import type {
   Attachment,
   Conversation,
@@ -168,7 +168,7 @@ export class Integrations {
               { Authorization: "Bearer " + key },
               z.object({
                 contractVersion: z.literal("studio-gateway-v1"),
-                environment: z.enum(["test", "sandbox"]),
+                environment: z.enum(["test", "sandbox", "production"]),
                 inboundOwner: z.literal("n8n"),
                 durableClaim: z.literal("studio-claim-v1"),
                 workflowId: z.string().min(1),
@@ -264,8 +264,7 @@ export class Integrations {
         c.pmsProperty &&
         (!this.v2 || (c.crmTenant && c.pmsTenant)),
       ) && connections.slice(0, 2).every((x) => x.status === "CONNECTED");
-    const sandboxAttested =
-      c.sandbox && ["test", "sandbox"].includes(c.environment ?? "production");
+    const sandboxAttested = orchestrationAllowed(c);
     return {
       connections,
       mappingReady,
@@ -302,10 +301,7 @@ export class Integrations {
     client: Client,
   ) {
     this.assertMapping(conversation);
-    if (
-      !this.cfg.sandbox ||
-      !["test", "sandbox"].includes(this.cfg.environment ?? "production")
-    )
+    if (!orchestrationAllowed(this.cfg))
       throw new ApiError(
         403,
         "SANDBOX_REQUIRED",
