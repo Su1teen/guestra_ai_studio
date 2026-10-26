@@ -2,7 +2,7 @@ import express from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { Database } from "./db.js";
-import type { Config } from "./config.js";
+import { orchestrationAllowed, type Config } from "./config.js";
 import { Repository, record, now } from "./repository.js";
 import { ApiError, requireValue } from "./errors.js";
 import type { Run, Conversation, Attempt, Identity } from "../shared/domain.js";
@@ -24,8 +24,7 @@ export class ExecutionClaims {
   ) {}
   scope(workspace: string) {
     if (
-      !this.cfg.sandbox ||
-      !["sandbox", "test"].includes(this.cfg.environment ?? "production") ||
+      !orchestrationAllowed(this.cfg) ||
       !this.cfg.orchestratorWorkspaces?.includes(workspace)
     )
       throw new ApiError(
@@ -284,9 +283,8 @@ export function registerOrchestration(
     express.raw({ type: "application/json", limit: "128kb" }),
     async (req, res) => {
       if (
-        !cfg.sandbox ||
-        cfg.callbackSecret.length < 32 ||
-        !["sandbox", "test"].includes(cfg.environment ?? "production")
+        !orchestrationAllowed(cfg) ||
+        cfg.callbackSecret.length < 32
       )
         throw new ApiError(503, "NOT_CONFIGURED", "Callback disabled");
       const timestamp = req.header("x-studio-timestamp") ?? "",
