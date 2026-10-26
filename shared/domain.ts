@@ -253,7 +253,7 @@ export const clientSchema = z
     channel: z.enum(channels),
     language: z.enum(["ru", "kk", "en"]).default("ru"),
     property: z.literal("LES Боровое").default("LES Боровое"),
-    parameters: z.record(z.string().max(500)).default({}),
+    parameters: z.record(z.string(), z.string().max(500)).default({}),
   })
   .strict();
 export const conversationSchema = z

@@ -229,7 +229,7 @@ export class CrmV2Adapter {
         sourceVersion: z.string(),
         searchId: z.string().uuid(),
         timestamp: z.string(),
-        results: z.array(z.record(z.unknown())),
+        results: z.array(z.record(z.string(), z.unknown())),
         totalResults: z.number().int().nonnegative(),
         responseTimeMs: z.number().nonnegative(),
       }),
@@ -264,7 +264,7 @@ export class CrmV2Adapter {
   services(scope: c.CrmScope) {
     return this.request(
       "services",
-      z.object({ services: z.array(z.record(z.unknown())) }),
+      z.object({ services: z.array(z.record(z.string(), z.unknown())) }),
       undefined,
       c.scopeSchema.parse(scope),
     );

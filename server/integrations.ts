@@ -530,7 +530,7 @@ export class Integrations {
       this.cfg,
       { "x-crm-api-key": this.cfg.crmKey },
       z.object({
-        messages: z.array(z.record(z.unknown())),
+        messages: z.array(z.record(z.string(), z.unknown())),
         nextCursor: z.string().nullable(),
       }),
     );

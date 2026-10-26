@@ -82,7 +82,7 @@ export const envelopeSchema = z
           timeoutMs: z.number(),
           maxRetries: z.number(),
           tools: z.array(z.string()),
-          flags: z.record(z.boolean()),
+          flags: z.record(z.string(), z.boolean()),
         }),
       })
       .strict(),
