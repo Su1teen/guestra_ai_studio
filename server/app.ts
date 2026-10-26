@@ -929,7 +929,7 @@ export function createApp(
         timeoutMs: z.number().int().min(1000).max(30000).optional(),
         maxRetries: z.number().int().min(0).max(5).optional(),
         tools: z.array(z.string().max(80)).max(40).optional(),
-        flags: z.record(z.boolean()).optional(),
+        flags: z.record(z.string(), z.boolean()).optional(),
       })
       .strict()
       .parse(req.body);

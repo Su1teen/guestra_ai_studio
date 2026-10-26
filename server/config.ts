@@ -12,6 +12,8 @@ export interface Config {
   mediaDir: string;
   signingSecret: string;
   sandbox: boolean;
+  /** Explicit opt-in for orchestrating live (production) systems; never implied by STUDIO_SANDBOX. */
+  liveOrchestration?: boolean;
   allowedHosts: string[];
   crmUrl: string;
   crmKey: string;
@@ -85,6 +87,7 @@ export async function config(): Promise<Config> {
     mediaDir: resolve(process.env.MEDIA_DIR ?? ".local/media"),
     signingSecret,
     sandbox: process.env.STUDIO_SANDBOX === "true",
+    liveOrchestration: process.env.STUDIO_LIVE_ORCHESTRATION === "true",
     allowedHosts: (process.env.SANDBOX_ALLOWED_HOSTS ?? "")
       .split(",")
       .filter(Boolean),
@@ -117,3 +120,14 @@ export async function config(): Promise<Config> {
       process.env.STUDIO_AUTO_MIGRATE === "true",
   };
 }
+
+/**
+ * Whether this deployment may drive guest-facing writes through n8n/CRM/PMS:
+ * an attested isolated environment (sandbox/test), or production with the explicit live opt-in.
+ */
+export const orchestrationAllowed = (
+  c: Pick<Config, "sandbox" | "liveOrchestration" | "environment">,
+) =>
+  (c.sandbox && ["test", "sandbox"].includes(c.environment ?? "production")) ||
+  (c.liveOrchestration === true && c.environment === "production");
+
