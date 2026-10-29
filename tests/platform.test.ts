@@ -586,6 +586,11 @@ describe("connected adapter and async completion", () => {
   it("serializes n8n executions and preserves a fast completion callback", async () => {
     const c = await newChat();
     await repo.patch("conversation_refs", c.id, { mode: "sandbox" });
+    // Studio records each guest message in the CRM Inbox before handing the run to n8n.
+    vi.spyOn(platform.integrations, "inbound").mockImplementation(async (conv, _i, attempt) => ({
+      messageId: "crm-in-" + attempt.externalMessageId, duplicate: false, aiReplyAllowed: true, allowedActions: [],
+      context: { conversation: { id: "crm-" + conv.id }, customer: { id: "crm-customer" } },
+    }) as never);
     const a = (await send(c, "Первый").expect(202)).body as Attempt;
     await send(c, "Второй").expect(202);
     const dispatch = vi
@@ -638,6 +643,11 @@ describe("connected adapter and async completion", () => {
     expect(runs.every((r) => r.status === "completed")).toBe(true);
   });
   it("stops unresolved execution and safely replays original keys on recovery", async () => {
+    // Studio records each guest message in the CRM Inbox before handing the run to n8n.
+    vi.spyOn(platform.integrations, "inbound").mockImplementation(async (conv, _i, attempt) => ({
+      messageId: "crm-in-" + attempt.externalMessageId, duplicate: false, aiReplyAllowed: true, allowedActions: [],
+      context: { conversation: { id: "crm-" + conv.id }, customer: { id: "crm-customer" } },
+    }) as never);
     const c = await newChat();
     await repo.patch("conversation_refs", c.id, { mode: "sandbox" });
     const a = (await send(c).expect(202)).body as Attempt;
@@ -674,3 +684,28 @@ function requireValueTest<T>(v: T | undefined): T {
   expect(v).toBeDefined();
   return v!;
 }
+describe("every Studio dialogue reaches the CRM Inbox", () => {
+  it("replays guest messages of local-preview and failed chats into CRM once", async () => {
+    await db.query("UPDATE workspaces SET mode='preview' WHERE id='les-sandbox'");
+    const local = await newChat();
+    await send(local, "Хотела забронировать").expect(202);
+    await platform.gateway.tick();
+    await db.query("UPDATE workspaces SET mode='sandbox' WHERE id='les-sandbox'");
+    vi.spyOn(platform.integrations, "capabilities").mockResolvedValue({ crmReady: true, sandboxReady: true } as never);
+    const sent: { conversation: string; text: string }[] = [];
+    vi.spyOn(platform.integrations, "inbound").mockImplementation(async (conv, _i, attempt) => {
+      sent.push({ conversation: conv.id, text: attempt.text });
+      return { messageId: "crm-in-" + attempt.externalMessageId, duplicate: false, aiReplyAllowed: true, allowedActions: [],
+        context: { conversation: { id: "crm-" + conv.id }, customer: { id: "crm-customer" } } } as never;
+    });
+    const result = await platform.gateway.backfillCrm();
+    expect(sent.filter((m) => m.conversation === local.id)).toEqual([{ conversation: local.id, text: "Хотела забронировать" }]);
+    expect(result.messages).toBeGreaterThanOrEqual(1);
+    const moved = await repo.get<Conversation>("conversation_refs", local.id);
+    expect(moved).toMatchObject({ mode: "sandbox", crmConversationId: "crm-" + local.id });
+    sent.length = 0;
+    await platform.gateway.backfillCrm();
+    expect(sent.filter((m) => m.conversation === local.id)).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
+});

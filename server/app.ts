@@ -317,6 +317,13 @@ export function createApp(
     const { mode } = z
       .object({ mode: z.enum(["preview", "crm", "sandbox"]) })
       .parse(req.body);
+    // Local preview kept dialogues outside CRM; it exists only for a loopback developer run.
+    if (mode === "preview" && !cfg.local)
+      throw new ApiError(
+        409,
+        "PREVIEW_RETIRED",
+        "Локальный режим отключён: все диалоги Studio ведутся через CRM",
+      );
     const caps = await integrations.capabilities();
     const database = await databaseReadiness(db, cfg);
     if (mode !== "preview" && !database.ready)
@@ -402,6 +409,12 @@ export function createApp(
           [r.workspaceId],
         )
       )[0];
+      if (workspace.mode === "preview" && !cfg.local)
+        throw new ApiError(
+          409,
+          "CRM_MODE_REQUIRED",
+          "Подключите CRM: диалоги Studio должны попадать в Inbox CRM",
+        );
       const namespace =
         workspace.mode === "preview"
           ? ""

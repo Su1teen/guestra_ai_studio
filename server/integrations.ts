@@ -299,6 +299,8 @@ export class Integrations {
     identity: Identity,
     attempt: Attempt,
     client: Client,
+    /** The exact inbound already frozen in a dispatch envelope, so CRM sees one identical message. */
+    frozen?: Record<string, unknown>,
   ) {
     this.assertMapping(conversation);
     if (!orchestrationAllowed(this.cfg))
@@ -313,7 +315,7 @@ export class Integrations {
       this.cfg,
       { "x-crm-api-key": this.cfg.crmKey },
       inboundResultSchema,
-      this.inboundPayload(conversation, identity, attempt, client),
+      frozen ?? this.inboundPayload(conversation, identity, attempt, client),
     );
   }
   inboundPayload(
