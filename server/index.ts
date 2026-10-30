@@ -29,6 +29,16 @@ const server = app.listen(cfg.port, cfg.host, () =>
     }),
   ),
 );
+// Bring dialogues that never reached CRM (legacy preview, failed workflow) into the CRM Inbox.
+if (!cfg.local)
+  void gateway
+    .backfillCrm()
+    .then((result) =>
+      console.log(JSON.stringify({ level: "info", event: "crm_backfill", ...result })),
+    )
+    .catch((error: Error) =>
+      console.error(JSON.stringify({ level: "error", event: "crm_backfill_failed", message: error.message })),
+    );
 const worker = setInterval(() => {
   void gateway
     .tick()

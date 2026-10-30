@@ -128,6 +128,7 @@ let feed: {
   operationStatus = "pending",
   lastScope: { conversationId: string; externalUserId: string } | undefined,
   inboundCount = 0,
+  inboundIds = new Set<string>(),
   dispatchCount = 0,
   loseResponse = false;
 function context(conversationId: string) {
@@ -261,7 +262,9 @@ async function fakeTransport(
       attempts: 1,
     });
   if (path.endsWith("/messages/inbound")) {
-    inboundCount++;
+    // CRM deduplicates by externalMessageId: Studio records the guest message, n8n repeats it.
+    inboundIds.add(String(body.externalMessageId));
+    inboundCount = inboundIds.size;
     return json({
       messageId: "crm-in-" + body.externalMessageId,
       duplicate: false,
@@ -281,7 +284,8 @@ async function fakeTransport(
       "execution-" + envelope.runId,
     );
     if (receipt.execute) {
-      inboundCount++;
+      inboundIds.add(String(envelope.externalMessageId));
+      inboundCount = inboundIds.size;
       feed.push({
         sequence: feed.length + 1,
         kind: "created",
@@ -405,6 +409,7 @@ beforeEach(async () => {
   human = false;
   operationStatus = "pending";
   inboundCount = 0;
+  inboundIds.clear();
   dispatchCount = 0;
   loseResponse = false;
   await db.query("UPDATE conversation_refs SET lease_until=NULL");

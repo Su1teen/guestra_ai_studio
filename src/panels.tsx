@@ -27,6 +27,7 @@ import type {
   Annotation,
   Call,
   Run,
+  Mode,
 } from "../shared/domain";
 import { stages } from "../shared/domain";
 import { Modal, Avatar, Empty } from "./components";
@@ -1060,7 +1061,8 @@ export function IntegrationsPanel({ data, refresh, notice }: Common) {
         .
       </p>
       <div className="mode-options">
-        {(["preview", "crm", "sandbox"] as const).map((mode) => (
+        {/* Local preview kept dialogues out of CRM: it is shown only while a local developer workspace still uses it. */}
+        {((data.workspace.mode === "preview" ? ["preview", "crm", "sandbox"] : ["crm", "sandbox"]) as Mode[]).map((mode) => (
           <button
             key={mode}
             className={data.workspace.mode === mode ? "selected" : ""}

@@ -3,6 +3,7 @@ import type { Database } from "./db.js";
 import { orchestrationAllowed } from "./config.js";
 import { Repository, record, now } from "./repository.js";
 import type {
+  Mode,
   Conversation,
   Identity,
   Message,
@@ -432,6 +433,49 @@ export class Gateway {
       });
     }
   }
+  /**
+   * Puts every Studio dialogue into the CRM Inbox: legacy local-preview chats and
+   * chats whose workflow failed before CRM saw the guest message. Only guest
+   * messages are replayed (preview template replies were never real); n8n is not
+   * re-dispatched. Idempotent: CRM deduplicates by externalMessageId.
+   */
+  async backfillCrm() {
+    const caps = await this.integrations.capabilities();
+    if (!caps.crmReady && !caps.sandboxReady) return { conversations: 0, messages: 0, skipped: "CRM_NOT_CONNECTED" };
+    const cfg = this.integrations.cfg;
+    const workspaces = await this.db.query<{ id: string; mode: Mode }>("SELECT id, mode FROM workspaces");
+    let conversations = 0, messages = 0;
+    for (const workspace of workspaces) {
+      const repo = new Repository(this.db, workspace.id);
+      const targetMode: Mode = workspace.mode === "sandbox" ? "sandbox" : "crm";
+      const attempts = await repo.list<Attempt>("message_attempts");
+      const previews = await repo.list<Message>("preview_messages");
+      for (let conv of await repo.list<Conversation>("conversation_refs")) {
+        const pending = attempts.filter((a) => a.conversationId === conv.id && !a.crmMessageId &&
+          (conv.mode === "preview" || a.status === "failed")).sort((a, b) => a.sequence - b.sequence);
+        if (!pending.length) continue;
+        if (conv.mode === "preview") {
+          conv = requireValue(await repo.patch<Conversation>("conversation_refs", conv.id, { mode: targetMode,
+            setupStatus: "READY", propertyMapping: { crmPropertyId: cfg.crmProperty, crmTenantId: cfg.crmTenant ?? "",
+              pmsPropertyId: cfg.pmsProperty, pmsTenantId: cfg.pmsTenant ?? "", environment: cfg.environment ?? "production" } }));
+        }
+        const identity = requireValue(await repo.get<Identity>("virtual_identities", conv.identityId));
+        const client = requireValue(await repo.get<Client>("virtual_clients", conv.clientId));
+        let crmConversationId = conv.crmConversationId;
+        for (const attempt of pending) {
+          const text = attempt.text || previews.find((m) => m.conversationId === conv.id && m.externalMessageId === attempt.externalMessageId)?.text || "";
+          const result = await this.integrations.inbound(conv, identity, { ...attempt, text }, client);
+          crmConversationId = result.context?.conversation?.id ?? crmConversationId;
+          await repo.patch("message_attempts", attempt.id, { crmMessageId: result.messageId });
+          messages++;
+        }
+        if (crmConversationId && crmConversationId !== conv.crmConversationId)
+          await repo.patch("conversation_refs", conv.id, { crmConversationId });
+        conversations++;
+      }
+    }
+    return { conversations, messages };
+  }
   async tick() {
     if (this.running) return;
     this.running = true;
@@ -620,6 +664,26 @@ export class Gateway {
             });
             await this.reconcile(repo, mapped);
           } else {
+            // Every Studio dialogue must reach the CRM Inbox even if the workflow fails later:
+            // record the guest message in CRM first. n8n's own inbound is then an idempotent duplicate.
+            if (!attempt.crmMessageId) {
+              const recorded = await this.integrations.inbound(
+                conv,
+                identity,
+                attempt,
+                client,
+                run.dispatchEnvelope?.inbound,
+              );
+              const crmConv = recorded.context?.conversation?.id;
+              if (crmConv && conv.crmConversationId !== crmConv)
+                await repo.patch("conversation_refs", conv.id, {
+                  crmConversationId: crmConv,
+                });
+              await repo.patch("message_attempts", attempt.id, {
+                crmMessageId: recorded.messageId,
+              });
+              attempt = { ...attempt, crmMessageId: recorded.messageId };
+            }
             const media = attempt.attachments.map((a) => ({
               ...a,
               url: new URL(
