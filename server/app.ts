@@ -42,6 +42,7 @@ import { registerOrchestration } from "./orchestration.js";
 import { ScenarioFixtures } from "./scenario-setup.js";
 import { databaseReadiness } from "./readiness.js";
 import { PromptDeployments } from "./prompt-deployments.js";
+import { importCrmChats } from "./crm-import.js";
 export function createApp(
   db: Database,
   cfg: Config,
@@ -245,6 +246,18 @@ export function createApp(
       .status(201)
       .json({ id, email: input.email, name: input.name, role: input.role });
   });
+  /** Hotel-started chats (PMS / CRM) appear in Studio; throttled per workspace, never blocks the page. */
+  const lastImport = new Map<string, number>();
+  async function syncCrmChats(workspaceId: string, mode: Mode, force = false) {
+    if (!integrations.v2 || !cfg.crmKey || mode === "preview") return null;
+    if (!force && Date.now() - (lastImport.get(workspaceId) ?? 0) < 15_000) return null;
+    lastImport.set(workspaceId, Date.now());
+    return importCrmChats(db, workspaceId, cfg, integrations.crmV2, mode);
+  }
+  app.post("/api/conversations/import-crm", roles("admin", "tester"), async (req, res) => {
+    const mode = (await db.query<{ mode: Mode }>("SELECT mode FROM workspaces WHERE id=$1", [req.principal.workspaceId]))[0]?.mode ?? "preview";
+    res.json((await syncCrmChats(req.principal.workspaceId, mode, true)) ?? { imported: 0, skipped: 0 });
+  });
   app.get("/api/bootstrap", async (req, res) => {
     const r = repo(req);
     const workspace = (
@@ -253,6 +266,12 @@ export function createApp(
         [r.workspaceId],
       )
     )[0];
+    let crmImport: { imported: number } | { error: string } | null = null;
+    try {
+      crmImport = await syncCrmChats(r.workspaceId, workspace.mode as Mode);
+    } catch (e) {
+      crmImport = { error: e instanceof ApiError ? e.code : "CRM_UNAVAILABLE" };
+    }
     const [
       clients,
       conversations,
@@ -284,6 +303,7 @@ export function createApp(
       annotations,
       scenarioRuns,
       database: db.kind,
+      crmImport,
     });
   });
   app.get("/api/integrations", async (req, res) => {

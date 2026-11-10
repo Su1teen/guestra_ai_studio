@@ -170,6 +170,18 @@ export class CrmV2Adapter {
         throw new ApiError(409, "IDENTITY_CONFLICT", "PMS evidence mismatch");
     return result;
   }
+  /** Simulator conversations of this property, including chats the hotel started from PMS / CRM. */
+  async inbox() {
+    const result = await this.request("inbox", c.crmInboxSchema, undefined, {
+      propertyId: this.cfg.crmProperty,
+      channel: "simulator",
+      queue: "all",
+      limit: "100",
+    });
+    if (result.propertyId !== this.cfg.crmProperty)
+      throw new ApiError(409, "ENVIRONMENT_MISMATCH", "CRM inbox property mismatch");
+    return result.conversations;
+  }
   async changes(scope: c.CrmScope, after = 0) {
     const s = c.scopeSchema.parse(scope);
     const result = await this.request(

@@ -400,3 +400,25 @@ export function approvedTools(
     ...new Set(configured.map((tool) => toolAliases[tool] ?? tool)),
   ].filter((tool) => allowedActions.includes(tool));
 }
+/** CRM integration inbox (scope inbox.read): conversations Studio may represent as a simulated guest. */
+export const crmInboxSchema = z.object({
+  propertyId: id,
+  hasMore: z.boolean().optional(),
+  conversations: z.array(
+    z.object({
+      id,
+      customerId: id,
+      customerName: z.string().max(300),
+      channel: z.string().max(40),
+      status: z.string().max(40),
+      automationMode: z.string().max(40),
+      lastMessageAt: z.string(),
+      lastMessage: z
+        .object({ text: z.string(), direction: z.string() })
+        .nullish(),
+      identity: z
+        .object({ externalUserId: id, externalChatId: id.nullable() })
+        .nullish(),
+    }),
+  ),
+});
