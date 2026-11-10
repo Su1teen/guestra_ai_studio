@@ -27,6 +27,7 @@ import {
   TreePine,
   ShieldCheck,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import type { Bootstrap, Timeline } from "./api";
 import { api, upload, modeLabels, stageLabels, time } from "./api";
@@ -516,6 +517,18 @@ export default function App() {
                 {writable && (
                   <button
                     className="new-chat-button"
+                    aria-label="Подтянуть чаты отеля из CRM"
+                    title="Подтянуть чаты, начатые отелем в PMS / CRM"
+                    onClick={() =>
+                      void api("/conversations/import-crm", "POST").then(() => refresh())
+                    }
+                  >
+                    <RefreshCw size={17} />
+                  </button>
+                )}
+                {writable && (
+                  <button
+                    className="new-chat-button"
                     aria-label="Новый разговор"
                     onClick={() =>
                       data.clients.length
@@ -599,6 +612,9 @@ export default function App() {
                           <div className="conversation-item-tags">
                             <span>{guest?.channel}</span>
                             {c.mode === "preview" && <span>preview</span>}
+                            {(c as { origin?: string }).origin === "crm" && (
+                              <span title="Чат начат отелем в PMS / CRM">чат отеля</span>
+                            )}
                             {data.annotations.some(
                               (a) => a.conversationId === c.id,
                             ) && <MessageSquare size={11} />}
