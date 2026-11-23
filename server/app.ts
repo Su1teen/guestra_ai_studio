@@ -43,10 +43,11 @@ import { ScenarioFixtures } from "./scenario-setup.js";
 import { databaseReadiness } from "./readiness.js";
 import { PromptDeployments } from "./prompt-deployments.js";
 import { importCrmChats } from "./crm-import.js";
+import { MetaEmulator, metaEmulatorConfig, registerMetaEmulatorCallback } from "./meta-emulator.js";
 export function createApp(
   db: Database,
   cfg: Config,
-  options: { publisher?: import("./integrations.js").PromptPublisher } = {},
+  options: { publisher?: import("./integrations.js").PromptPublisher; metaEmulator?: MetaEmulator } = {},
 ) {
   const app = express();
   app.disable("x-powered-by");
@@ -80,6 +81,9 @@ export function createApp(
     res.json({ localPreview: cfg.local }),
   );
   const claims = registerOrchestration(app, db, cfg, gateway, media);
+  // Never on production: signed Meta events would put invented guests into a live CRM.
+  const metaEmulator = options.metaEmulator ?? new MetaEmulator(["test", "sandbox"].includes(cfg.environment ?? "production") ? metaEmulatorConfig() : null);
+  registerMetaEmulatorCallback(app, metaEmulator);
   const fixtures = new ScenarioFixtures(db, integrations);
   const promptDeployments = new PromptDeployments(db, cfg, options.publisher);
   app.use(express.json({ limit: "128kb" }));
@@ -254,6 +258,13 @@ export function createApp(
     lastImport.set(workspaceId, Date.now());
     return importCrmChats(db, workspaceId, cfg, integrations.crmV2, mode);
   }
+  app.get("/api/meta-emulator", (_req, res) => {
+    const c = metaEmulator.cfg;
+    res.json({ enabled: Boolean(c), channels: { whatsapp: Boolean(c?.whatsappPhoneNumberId), instagram: Boolean(c?.instagramAccountId) }, thread: metaEmulator.thread });
+  });
+  app.post("/api/meta-emulator/messages", roles("admin", "tester"), async (req, res) => {
+    res.status(201).json(await metaEmulator.send(req.body));
+  });
   app.post("/api/conversations/import-crm", roles("admin", "tester"), async (req, res) => {
     const mode = (await db.query<{ mode: Mode }>("SELECT mode FROM workspaces WHERE id=$1", [req.principal.workspaceId]))[0]?.mode ?? "preview";
     res.json((await syncCrmChats(req.principal.workspaceId, mode, true)) ?? { imported: 0, skipped: 0 });

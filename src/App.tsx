@@ -5,6 +5,7 @@ import {
   FlaskConical,
   Bot,
   Plug,
+  Smartphone,
   Search,
   Plus,
   ChevronDown,
@@ -45,7 +46,8 @@ import {
   CallModal,
   type NoteTarget,
 } from "./panels";
-type Page = "chats" | "clients" | "scenarios" | "agents" | "integrations";
+import { MetaEmulatorPanel } from "./MetaEmulatorPanel";
+type Page = "chats" | "clients" | "scenarios" | "agents" | "integrations" | "meta";
 type UploadItem = {
   id: string;
   conversationId: string;
@@ -431,6 +433,7 @@ export default function App() {
     { id: "scenarios" as const, label: "Сценарии", icon: FlaskConical },
     { id: "agents" as const, label: "Агенты", icon: Bot },
     { id: "integrations" as const, label: "Связи", icon: Plug },
+    { id: "meta" as const, label: "Как WhatsApp", icon: Smartphone },
   ];
   return (
     <div className="app-shell">
@@ -1212,6 +1215,8 @@ export default function App() {
           />
         ) : page === "agents" ? (
           <AgentPanel data={data} refresh={refresh} notice={notice} />
+        ) : page === "meta" ? (
+          <MetaEmulatorPanel writable={["admin", "tester"].includes(data.user.role)} notice={notice} />
         ) : (
           <IntegrationsPanel data={data} refresh={refresh} notice={notice} />
         )}
