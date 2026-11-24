@@ -89,6 +89,8 @@ const snapshotSchema = z.object({
   checkOut: z.string().optional(),
   totalAmount: z.union([z.string(), z.number()]).optional(),
   currencyCode: z.string().optional(),
+  requiredDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/u).optional(),
+  optionUntil: z.string().datetime().nullable().optional(),
   integrationContext: z
     .object({
       sourceSystem: z.literal("guestra_crm"),
