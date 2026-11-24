@@ -154,6 +154,14 @@ describe("authentication and isolation", () => {
       .set("Origin", "https://other.invalid")
       .send({})
       .expect(403);
+    // Opened on a custom domain in front of the service: the request comes from the page's own address.
+    const custom = await request(platform.app).post("/api/auth/login")
+      .set("Host", "studio.example.test").set("X-Forwarded-Proto", "https").set("Origin", "https://studio.example.test")
+      .send({ email: "nobody@example.test", password: "incorrect" });
+    expect(custom.status).toBe(401);
+    await request(platform.app).post("/api/auth/login")
+      .set("Host", "studio.example.test").set("X-Forwarded-Proto", "https").set("Origin", "https://evil.example.test")
+      .send({ email: "nobody@example.test", password: "incorrect" }).expect(403);
   });
   it("viewer cannot send, upload, annotate or change prompts", async () => {
     const c = await newChat();
