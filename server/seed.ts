@@ -1,6 +1,6 @@
 import type { Database, Sql } from "./db.js";
 import { Repository, record, now } from "./repository.js";
-import { passwordHash } from "./auth.js";
+import { passwordHash, passwordMatches } from "./auth.js";
 export async function seed(db: Database, local: boolean) {
   return db.transaction((tx) => seedRecords(tx, local));
 }
@@ -20,13 +20,27 @@ async function seedRecords(db: Sql, local: boolean) {
   if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
     if (process.env.ADMIN_PASSWORD.length < 12)
       throw new Error("ADMIN_PASSWORD minimum 12 characters");
-    await db.query(
-      "INSERT INTO studio_users(id,email,password_hash,name) VALUES('bootstrap-admin',$1,$2,'Администратор') ON CONFLICT(email) DO NOTHING",
-      [
-        process.env.ADMIN_EMAIL.toLowerCase(),
-        passwordHash(process.env.ADMIN_PASSWORD),
-      ],
+    const adminEmail = process.env.ADMIN_EMAIL.toLowerCase();
+    const existing = await db.query<{ password_hash: string | null }>(
+      "SELECT password_hash FROM studio_users WHERE email=$1",
+      [adminEmail],
     );
+    if (!existing[0]) {
+      await db.query(
+        "INSERT INTO studio_users(id,email,password_hash,name) VALUES('bootstrap-admin',$1,$2,'Администратор') ON CONFLICT(email) DO NOTHING",
+        [adminEmail, passwordHash(process.env.ADMIN_PASSWORD)],
+      );
+    } else if (
+      // ADMIN_PASSWORD is the source of truth for the administrator: changing
+      // the variable and restarting rotates the stored hash.
+      !existing[0].password_hash ||
+      !passwordMatches(process.env.ADMIN_PASSWORD, existing[0].password_hash)
+    ) {
+      await db.query("UPDATE studio_users SET password_hash=$2 WHERE email=$1", [
+        adminEmail,
+        passwordHash(process.env.ADMIN_PASSWORD),
+      ]);
+    }
     await db.query(
       "INSERT INTO memberships SELECT 'les-sandbox',id,'admin' FROM studio_users WHERE email=$1 ON CONFLICT DO NOTHING",
       [process.env.ADMIN_EMAIL.toLowerCase()],
